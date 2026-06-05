@@ -6,7 +6,7 @@ import Footer from './Footer'
 import WalletModal from './WalletModal'
 
 const tabOrder = [
-  { path: '/swap', label: 'Swap' },
+  { path: '/', label: 'Swap' },
   { path: '/send', label: 'Send' },
   { path: '/pool', label: 'Pool' },
 ]
@@ -25,7 +25,7 @@ export default function Layout({ children }) {
     <div className="min-h-screen bg-[var(--bg-primary)] text-[var(--text-primary)] flex flex-col">
       <header className="border-b border-[var(--border)] sticky top-0 z-40 bg-[var(--bg-primary)]">
         <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <Link href="/swap" className="flex items-center hover:opacity-80 transition-opacity no-underline">
+          <Link href="/" className="flex items-center hover:opacity-80 transition-opacity no-underline">
             <span className="text-lg font-semibold tracking-tight text-[var(--accent)]" style={{ fontFamily: 'var(--font-display)' }}>
               Swapex
             </span>
