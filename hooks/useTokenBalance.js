@@ -1,40 +1,43 @@
-import { useState, useEffect } from 'react'
-import { ethers } from 'ethers'
+import { useState, useEffect, useCallback } from 'react'
+import { BigNumber, Contract } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
 import { ERC20_ABI } from '../constants'
 
-export default function useTokenBalance(tokenAddress) {
-  const { account, library } = useWeb3()
-  const [balance, setBalance] = useState('0')
-  const [loading, setLoading] = useState(true)
+/** Balance of a token entry ({address, decimals}) as base units. Refreshes on each new block. */
+export default function useTokenBalance(token) {
+  const { account, library, wrongNetwork } = useWeb3()
+  const [balance, setBalance] = useState(BigNumber.from(0))
+  const [loading, setLoading] = useState(false)
+  const address = token?.address
+
+  const refetch = useCallback(async () => {
+    if (!account || !library || !address || wrongNetwork) {
+      setBalance(BigNumber.from(0))
+      return
+    }
+    try {
+      const bal =
+        address === 'NATIVE'
+          ? await library.getBalance(account)
+          : await new Contract(address, ERC20_ABI, library).balanceOf(account)
+      setBalance(bal)
+    } catch (e) {
+      console.error('useTokenBalance error:', e)
+    }
+  }, [account, library, address, wrongNetwork])
 
   useEffect(() => {
-    async function fetchBalance() {
-      if (!account || !library) {
-        setBalance('0')
-        setLoading(false)
-        return
-      }
-      try {
-        setLoading(true)
-        if (tokenAddress === 'NATIVE') {
-          const bal = await library.getBalance(account)
-          setBalance(ethers.utils.formatEther(bal))
-        } else {
-          const contract = new ethers.Contract(tokenAddress, ERC20_ABI, library)
-          const decimals = await contract.decimals()
-          const bal = await contract.balanceOf(account)
-          setBalance(ethers.utils.formatUnits(bal, decimals))
-        }
-      } catch (e) {
-        console.error('useTokenBalance error:', e)
-        setBalance('0')
-      } finally {
-        setLoading(false)
-      }
+    let cancelled = false
+    setLoading(true)
+    refetch().finally(() => !cancelled && setLoading(false))
+    if (!library) return () => { cancelled = true }
+    const onBlock = () => refetch()
+    library.on('block', onBlock)
+    return () => {
+      cancelled = true
+      library.removeListener('block', onBlock)
     }
-    fetchBalance()
-  }, [tokenAddress, account, library])
+  }, [refetch, library])
 
-  return { balance, loading }
+  return { balance, loading, refetch }
 }

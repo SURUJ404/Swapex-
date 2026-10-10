@@ -1,79 +1,55 @@
-import React, { useState, useEffect } from 'react'
-import { ethers } from 'ethers'
+import React, { useState, useMemo } from 'react'
+import { Contract, utils } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { useToast } from './Toast'
 import { TOKEN_LIST, ERC20_ABI } from '../constants'
 import TokenSelectModal from './TokenSelectModal'
+import NetworkGuard from './NetworkGuard'
+import useTokenBalance from '../hooks/useTokenBalance'
+import useTransact from '../hooks/useTransact'
+import { parseAmount, formatAmount } from '../lib/amounts'
+
+const GAS_RESERVE = utils.parseEther('0.01')
 
 export default function SendForm() {
   const { account, library } = useWeb3()
-  const { addToast } = useToast()
+  const { run, pending: loading } = useTransact()
 
   const [selectedToken, setSelectedToken] = useState(TOKEN_LIST[0])
   const [recipient, setRecipient] = useState('')
   const [amount, setAmount] = useState('')
-  const [balance, setBalance] = useState('0')
-  const [loading, setLoading] = useState(false)
   const [showModal, setShowModal] = useState(false)
 
-  useEffect(() => {
-    if (!account || !library) return
-    let stale = false
-    async function fetchBalance() {
-      try {
-        if (selectedToken.address === 'NATIVE') {
-          const bal = await library.getBalance(account)
-          if (!stale) setBalance(ethers.utils.formatEther(bal))
-        } else {
-          const contract = new ethers.Contract(selectedToken.address, ERC20_ABI, library)
-          const decimals = await contract.decimals()
-          const bal = await contract.balanceOf(account)
-          if (!stale) setBalance(ethers.utils.formatUnits(bal, decimals))
-        }
-      } catch {
-        if (!stale) setBalance('0')
-      }
-    }
-    fetchBalance()
-    return () => { stale = true }
-  }, [selectedToken, account, library])
+  const { balance, refetch } = useTokenBalance(selectedToken)
+  const amountBn = useMemo(() => parseAmount(amount, selectedToken.decimals), [amount, selectedToken])
+  const validRecipient = utils.isAddress(recipient)
+
+  const setMax = () => {
+    let max = balance
+    if (selectedToken.address === 'NATIVE') max = max.gt(GAS_RESERVE) ? max.sub(GAS_RESERVE) : max.mul(0)
+    setAmount(utils.formatUnits(max, selectedToken.decimals))
+  }
+
+  let status = null
+  if (!validRecipient) status = recipient ? 'Invalid recipient address' : 'Enter a recipient'
+  else if (!amountBn) status = 'Enter an amount'
+  else if (amountBn.gt(balance)) status = `Insufficient ${selectedToken.symbol} balance`
 
   const send = async () => {
-    if (!account || !library || !recipient || !amount) return
-    if (!ethers.utils.isAddress(recipient)) {
-      addToast('Invalid recipient address', 'error')
-      return
-    }
-    if (parseFloat(amount) > parseFloat(balance)) {
-      addToast('Insufficient balance', 'error')
-      return
-    }
-    setLoading(true)
-    try {
-      const signer = library.getSigner()
-      let tx
-      if (selectedToken.address === 'NATIVE') {
-        tx = await signer.sendTransaction({
-          to: recipient,
-          value: ethers.utils.parseEther(amount),
-        })
-      } else {
-        const contract = new ethers.Contract(selectedToken.address, ERC20_ABI, signer)
-        const decimals = await contract.decimals()
-        tx = await contract.transfer(recipient, ethers.utils.parseUnits(amount, decimals))
-      }
-      const receipt = await tx.wait()
-      addToast(`Sent ${amount} ${selectedToken.symbol} to ${recipient.slice(0, 6)}...`, 'success')
-      const txs = JSON.parse(localStorage.getItem('swapex_transactions') || '[]')
-      txs.push({ hash: receipt.transactionHash, label: `Send ${selectedToken.symbol}`, status: 'confirmed' })
-      localStorage.setItem('swapex_transactions', JSON.stringify(txs))
-      setAmount('')
-      setRecipient('')
-    } catch (e) {
-      addToast(e.message || 'Send failed', 'error')
-    } finally {
-      setLoading(false)
-    }
+    if (!account || !library || !amountBn || !validRecipient) return
+    const signer = library.getSigner()
+    await run({
+      label: `Send ${selectedToken.symbol}`,
+      successMessage: `Sent ${formatAmount(amountBn, selectedToken.decimals)} ${selectedToken.symbol} to ${recipient.slice(0, 6)}...`,
+      send: () =>
+        selectedToken.address === 'NATIVE'
+          ? signer.sendTransaction({ to: recipient, value: amountBn })
+          : new Contract(selectedToken.address, ERC20_ABI, signer).transfer(recipient, amountBn),
+      onSuccess: () => {
+        setAmount('')
+        setRecipient('')
+        refetch()
+      },
+    })
   }
 
   return (
@@ -101,7 +77,7 @@ export default function SendForm() {
             type="text"
             placeholder="0x..."
             value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
+            onChange={(e) => setRecipient(e.target.value.trim())}
             className="w-full px-3 py-2 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] text-sm font-mono outline-none focus:border-[var(--accent)]"
           />
         </div>
@@ -110,19 +86,23 @@ export default function SendForm() {
           <div className="flex items-center justify-between mb-1">
             <label className="text-xs text-[var(--text-tertiary)]">Amount</label>
             <span className="text-xs text-[var(--text-tertiary)] font-mono">
-              Balance: {parseFloat(balance).toFixed(4)}
+              Balance: {formatAmount(balance, selectedToken.decimals, 4) || '0'}
             </span>
           </div>
           <div className="flex items-center gap-2">
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               placeholder="0.0"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value.replace(',', '.')
+                if (/^\d*\.?\d*$/.test(v)) setAmount(v)
+              }}
               className="flex-1 px-3 py-2 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] text-lg font-mono outline-none focus:border-[var(--accent)]"
             />
             <button
-              onClick={() => setAmount(balance)}
+              onClick={setMax}
               className="px-3 py-2 rounded-lg bg-[var(--accent)]/10 text-[var(--accent)] text-xs font-medium hover:bg-[var(--accent)]/20 transition-colors"
             >
               MAX
@@ -131,19 +111,23 @@ export default function SendForm() {
         </div>
       </div>
 
-      <button
-        onClick={send}
-        disabled={!account || !recipient || !amount || loading}
-        className={`w-full mt-6 py-3 rounded-xl font-semibold text-sm font-display transition-all ${
-          !account
-            ? 'bg-[var(--accent)] text-white'
-            : loading
-            ? 'bg-[var(--accent)]/50 text-white cursor-wait'
-            : 'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]'
-        }`}
-      >
-        {!account ? 'Connect Wallet' : loading ? 'Sending...' : 'Send'}
-      </button>
+      <div className="mt-6">
+        <NetworkGuard>
+          <button
+            onClick={send}
+            disabled={Boolean(status) || loading}
+            className={`w-full py-3 rounded-xl font-semibold text-sm font-display transition-all ${
+              status
+                ? 'bg-[var(--bg-secondary)] text-[var(--text-tertiary)] cursor-not-allowed'
+                : loading
+                ? 'bg-[var(--accent)]/50 text-white cursor-wait'
+                : 'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]'
+            }`}
+          >
+            {status || (loading ? 'Sending...' : 'Send')}
+          </button>
+        </NetworkGuard>
+      </div>
 
       <TokenSelectModal open={showModal} onClose={() => setShowModal(false)} onSelect={setSelectedToken} />
     </div>

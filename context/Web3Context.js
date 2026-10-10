@@ -4,6 +4,7 @@ import { InjectedConnector } from '@web3-react/injected-connector'
 import { WalletConnectConnector } from '@web3-react/walletconnect-connector'
 import { WalletLinkConnector } from '@web3-react/walletlink-connector'
 import { ethers } from 'ethers'
+import { REQUIRED_CHAIN_ID, CHAINS } from '../lib/config'
 
 const injected = new InjectedConnector({ supportedChainIds: [1, 3, 4, 5, 42] })
 
@@ -32,6 +33,8 @@ function Web3Manager({ children }) {
   const { active, error, account, library, chainId, activate, deactivate } = useWeb3React()
   const [balance, setBalance] = useState('0')
   const [ensName, setEnsName] = useState('')
+  const [walletModalOpen, setWalletModalOpen] = useState(false)
+  const wrongNetwork = Boolean(active && chainId && chainId !== REQUIRED_CHAIN_ID)
 
   const connectWallet = useCallback(async (connector) => {
     try {
@@ -40,6 +43,20 @@ function Web3Manager({ children }) {
       console.error('connectWallet error:', e)
     }
   }, [activate])
+
+  const switchNetwork = useCallback(async () => {
+    const target = CHAINS[REQUIRED_CHAIN_ID]
+    const provider = library?.provider
+    if (!provider?.request || !target) return
+    try {
+      await provider.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: target.hexId }],
+      })
+    } catch (e) {
+      console.error('switchNetwork error:', e)
+    }
+  }, [library])
 
   const disconnectWallet = useCallback(() => {
     try {
@@ -90,6 +107,10 @@ function Web3Manager({ children }) {
         balance,
         ensName,
         connectWallet,
+        wrongNetwork,
+        switchNetwork,
+        walletModalOpen,
+        setWalletModalOpen,
         disconnectWallet,
       }}
     >

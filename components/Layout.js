@@ -1,8 +1,9 @@
-import React, { useState } from 'react'
+import React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { useWeb3 } from '../context/Web3Context'
 import Footer from './Footer'
+import TransactionHistory from './TransactionHistory'
 import WalletModal from './WalletModal'
 
 const tabOrder = [
@@ -13,8 +14,7 @@ const tabOrder = [
 
 export default function Layout({ children }) {
   const router = useRouter()
-  const { active, account, disconnectWallet, ensName } = useWeb3()
-  const [showWalletModal, setShowWalletModal] = useState(false)
+  const { active, account, disconnectWallet, ensName, walletModalOpen: showWalletModal, setWalletModalOpen: setShowWalletModal } = useWeb3()
 
   const isPoolActive = ['/pool', '/add', '/remove', '/create'].includes(router.pathname)
   const currentTabIndex = tabOrder.findIndex(({ path }) =>
@@ -81,6 +81,7 @@ export default function Layout({ children }) {
         </div>
 
         <main className="w-full">{children}</main>
+        <div className="mt-6"><TransactionHistory /></div>
       </div>
 
       <Footer />

@@ -1,34 +1,48 @@
 import React, { useState, useEffect } from 'react'
 import Link from 'next/link'
-import { ethers } from 'ethers'
+import { Contract, constants } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { FACTORY_ADDRESS, FACTORY_ABI, PAIR_ABI } from '../constants'
+import { FACTORY_ADDRESS, FACTORY_ABI, PAIR_ABI, TOKEN_LIST } from '../constants'
+import { toPathAddress } from '../lib/route'
+import { formatAmount } from '../lib/amounts'
+
+const RECENT_POOLS = 25 // mainnet has ~300k pairs; never walk them all from the browser
+
+function meta(address) {
+  const t = TOKEN_LIST.find((x) => x.address.toLowerCase() === address.toLowerCase() || toPathAddress(x).toLowerCase() === address.toLowerCase())
+  return { symbol: t?.symbol === 'ETH' ? 'WETH' : t?.symbol || `${address.slice(0, 6)}…`, decimals: t?.decimals ?? 18 }
+}
+
+async function readPair(library, pairAddr) {
+  const pair = new Contract(pairAddr, PAIR_ABI, library)
+  const [t0, t1, reserves] = await Promise.all([pair.token0(), pair.token1(), pair.getReserves()])
+  return { address: pairAddr, token0: t0, token1: t1, reserves }
+}
 
 export default function PoolOverview() {
-  const { account, library } = useWeb3()
+  const { account, library, wrongNetwork } = useWeb3()
   const [pools, setPools] = useState([])
+  const [totalPairs, setTotalPairs] = useState(0)
   const [userPositions, setUserPositions] = useState([])
   const [loading, setLoading] = useState(true)
 
+  // Newest pools, fetched in parallel.
   useEffect(() => {
-    if (!library) return
+    if (!library || wrongNetwork) return
     let stale = false
     async function fetchPools() {
       try {
-        const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, library)
-        const count = await factory.allPairsLength()
-        const poolData = []
-        for (let i = 0; i < count.toNumber(); i++) {
-          const pairAddr = await factory.allPairs(i)
-          const pair = new ethers.Contract(pairAddr, PAIR_ABI, library)
-          const [t0, t1, reserves] = await Promise.all([
-            pair.token0(),
-            pair.token1(),
-            pair.getReserves(),
-          ])
-          poolData.push({ address: pairAddr, token0: t0, token1: t1, reserves })
+        const factory = new Contract(FACTORY_ADDRESS, FACTORY_ABI, library)
+        const count = (await factory.allPairsLength()).toNumber()
+        const from = Math.max(0, count - RECENT_POOLS)
+        const addrs = await Promise.all(
+          Array.from({ length: count - from }, (_, k) => factory.allPairs(count - 1 - k))
+        )
+        const results = await Promise.allSettled(addrs.map((a) => readPair(library, a)))
+        if (!stale) {
+          setTotalPairs(count)
+          setPools(results.filter((r) => r.status === 'fulfilled').map((r) => r.value))
         }
-        if (!stale) setPools(poolData)
       } catch (e) {
         console.error('Failed to fetch pools:', e)
       } finally {
@@ -37,39 +51,46 @@ export default function PoolOverview() {
     }
     fetchPools()
     return () => { stale = true }
-  }, [library])
+  }, [library, wrongNetwork])
 
+  // Your positions: look up pairs between the listed tokens (no full-chain scan).
   useEffect(() => {
-    if (!account || !library) return
+    if (!account || !library || wrongNetwork) {
+      setUserPositions([])
+      return
+    }
     let stale = false
     async function fetchPositions() {
-      const positions = []
-      for (const pool of pools) {
-        try {
-          const pair = new ethers.Contract(pool.address, PAIR_ABI, library)
+      const factory = new Contract(FACTORY_ADDRESS, FACTORY_ABI, library)
+      const addrs = [...new Set(TOKEN_LIST.map((t) => toPathAddress(t).toLowerCase()))]
+      const combos = []
+      for (let i = 0; i < addrs.length; i++) for (let j = i + 1; j < addrs.length; j++) combos.push([addrs[i], addrs[j]])
+      const found = await Promise.allSettled(
+        combos.map(async ([a, b]) => {
+          const pairAddr = await factory.getPair(a, b)
+          if (pairAddr === constants.AddressZero) return null
+          const pair = new Contract(pairAddr, PAIR_ABI, library)
           const bal = await pair.balanceOf(account)
-          if (!bal.isZero()) {
-            const totalSupply = await pair.totalSupply()
-            const token0Bal = pool.reserves._reserve0.mul(bal).div(totalSupply)
-            const token1Bal = pool.reserves._reserve1.mul(bal).div(totalSupply)
-            positions.push({
-              address: pool.address,
-              token0: pool.token0,
-              token1: pool.token1,
-              lpBalance: ethers.utils.formatEther(bal),
-              token0Amount: ethers.utils.formatEther(token0Bal),
-              token1Amount: ethers.utils.formatEther(token1Bal),
-            })
-          }
-        } catch {
-          continue
-        }
-      }
+          if (bal.isZero()) return null
+          const [info, totalSupply] = await Promise.all([readPair(library, pairAddr), pair.totalSupply()])
+          return { ...info, bal, totalSupply }
+        })
+      )
+      const positions = found
+        .filter((r) => r.status === 'fulfilled' && r.value)
+        .map(({ value: v }) => ({
+          address: v.address,
+          token0: v.token0,
+          token1: v.token1,
+          lpBalance: v.bal,
+          amount0: v.reserves._reserve0.mul(v.bal).div(v.totalSupply),
+          amount1: v.reserves._reserve1.mul(v.bal).div(v.totalSupply),
+        }))
       if (!stale) setUserPositions(positions)
     }
-    if (pools.length > 0) fetchPositions()
+    fetchPositions().catch(() => !stale && setUserPositions([]))
     return () => { stale = true }
-  }, [account, library, pools])
+  }, [account, library, wrongNetwork])
 
   return (
     <div className="max-w-lg mx-auto">
@@ -95,14 +116,15 @@ export default function PoolOverview() {
         <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-6 mb-6">
           <h2 className="text-lg font-semibold font-display text-[var(--text-primary)] mb-4">Your Positions</h2>
           <div className="space-y-3">
-            {userPositions.map((pos, i) => (
-              <div key={i} className="bg-[var(--bg-secondary)] rounded-xl p-4">
+            {userPositions.map((pos) => (
+              <div key={pos.address} className="bg-[var(--bg-secondary)] rounded-xl p-4">
                 <p className="text-sm font-mono text-[var(--text-secondary)] mb-1">
-                  {pos.token0.slice(0, 6)}... {pos.token1.slice(0, 6)}...
+                  {meta(pos.token0).symbol} / {meta(pos.token1).symbol}
                 </p>
                 <p className="text-xs text-[var(--text-tertiary)]">
-                  LP: {parseFloat(pos.lpBalance).toFixed(4)} | {parseFloat(pos.token0Amount).toFixed(4)} / {parseFloat(pos.token1Amount).toFixed(4)}
+                  LP: {formatAmount(pos.lpBalance, 18, 6)} | {formatAmount(pos.amount0, meta(pos.token0).decimals, 4)} {meta(pos.token0).symbol} / {formatAmount(pos.amount1, meta(pos.token1).decimals, 4)} {meta(pos.token1).symbol}
                 </p>
+                <p className="text-xs text-[var(--text-tertiary)] font-mono mt-1 break-all">Pair: {pos.address}</p>
               </div>
             ))}
           </div>
@@ -111,7 +133,7 @@ export default function PoolOverview() {
 
       <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-6">
         <h2 className="text-lg font-semibold font-display text-[var(--text-primary)] mb-4">
-          All Pools ({pools.length})
+          Newest Pools ({pools.length} of {totalPairs.toLocaleString()})
         </h2>
         {loading ? (
           <p className="text-sm text-[var(--text-tertiary)]">Loading pools...</p>
@@ -127,14 +149,14 @@ export default function PoolOverview() {
           </div>
         ) : (
           <div className="space-y-2">
-            {pools.map((pool, i) => (
-              <div key={i} className="flex items-center justify-between py-2 border-b border-[var(--border)]/50 last:border-0">
+            {pools.map((pool) => (
+              <div key={pool.address} className="flex items-center justify-between py-2 border-b border-[var(--border)]/50 last:border-0">
                 <div className="flex flex-col">
                   <span className="text-sm font-mono text-[var(--text-primary)]">
-                    {pool.token0.slice(0, 6)}... / {pool.token1.slice(0, 6)}...
+                    {meta(pool.token0).symbol} / {meta(pool.token1).symbol}
                   </span>
                   <span className="text-xs text-[var(--text-tertiary)]">
-                    Reserve: {ethers.utils.formatEther(pool.reserves._reserve0).slice(0, 6)} / {ethers.utils.formatEther(pool.reserves._reserve1).slice(0, 6)}
+                    Reserve: {formatAmount(pool.reserves._reserve0, meta(pool.token0).decimals, 2)} / {formatAmount(pool.reserves._reserve1, meta(pool.token1).decimals, 2)}
                   </span>
                 </div>
                 <span className="text-xs text-[var(--text-tertiary)] font-mono">{pool.address.slice(0, 10)}...</span>

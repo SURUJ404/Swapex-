@@ -1,0 +1,84 @@
+import { describe, it, expect } from 'vitest'
+import { BigNumber } from 'ethers'
+import {
+  parseAmount,
+  minAfterSlippage,
+  maxAfterSlippage,
+  percentToBps,
+  quote,
+  deadlineFromNow,
+  formatAmount,
+  priceImpact,
+} from '../lib/amounts'
+import { parseError } from '../lib/errors'
+
+describe('parseAmount', () => {
+  it('parses plain and fractional values', () => {
+    expect(parseAmount('1', 18).toString()).toBe('1000000000000000000')
+    expect(parseAmount('1.5', 6).toString()).toBe('1500000')
+    expect(parseAmount('.5', 6).toString()).toBe('500000')
+  })
+  it('truncates extra decimals instead of throwing', () => {
+    expect(parseAmount('1.1234567', 6).toString()).toBe('1123456')
+  })
+  it('rejects empty, zero, negative and junk', () => {
+    for (const v of ['', '.', '0', '0.0', '-1', '1e5', 'abc', '1.2.3', null, undefined]) {
+      expect(parseAmount(v, 18)).toBeNull()
+    }
+  })
+})
+
+describe('slippage', () => {
+  it('uses integer basis-point math', () => {
+    expect(minAfterSlippage(BigNumber.from(10000), 50).toNumber()).toBe(9950)
+    expect(minAfterSlippage(BigNumber.from(10000), 10).toNumber()).toBe(9990) // 0.1% used to crash
+    expect(maxAfterSlippage(BigNumber.from(10000), 50).toNumber()).toBe(10050)
+  })
+  it('rejects invalid bps', () => {
+    expect(() => minAfterSlippage(BigNumber.from(1), 0.5)).toThrow()
+    expect(() => minAfterSlippage(BigNumber.from(1), -1)).toThrow()
+    expect(() => minAfterSlippage(BigNumber.from(1), 10001)).toThrow()
+  })
+  it('converts percent text to bps with a cap', () => {
+    expect(percentToBps('0.5')).toBe(50)
+    expect(percentToBps('1')).toBe(100)
+    expect(percentToBps('0.1')).toBe(10)
+    expect(percentToBps('51')).toBeNull()
+    expect(percentToBps('abc')).toBeNull()
+    expect(percentToBps('-1')).toBeNull()
+  })
+})
+
+describe('quote', () => {
+  it('matches UniswapV2Library.quote', () => {
+    expect(quote(BigNumber.from(100), BigNumber.from(1000), BigNumber.from(2000)).toNumber()).toBe(200)
+    expect(quote(BigNumber.from(0), BigNumber.from(1000), BigNumber.from(2000))).toBeNull()
+    expect(quote(BigNumber.from(5), BigNumber.from(0), BigNumber.from(2000))).toBeNull()
+  })
+})
+
+describe('misc', () => {
+  it('computes deadlines in unix seconds', () => {
+    expect(deadlineFromNow(20, 1_000_000_000_000)).toBe(1_000_000_000 + 1200)
+    expect(deadlineFromNow(NaN, 1_000_000_000_000)).toBe(1_000_000_000 + 1200)
+  })
+  it('formats base units', () => {
+    expect(formatAmount(BigNumber.from('1500000'), 6)).toBe('1.5')
+    expect(formatAmount(BigNumber.from('1000000'), 6)).toBe('1')
+  })
+  it('price impact excludes the 0.3% fee', () => {
+    // 1 token in, pool 1:1 with huge reserves -> out ~ 0.997 -> impact ~ 0
+    const big = BigNumber.from('1000000000000000000000000')
+    const out = BigNumber.from('997000000000000000')
+    const impact = priceImpact(BigNumber.from('1000000000000000000'), out, [{ reserveIn: big, reserveOut: big }], 18, 18)
+    expect(impact).toBeLessThan(0.0001)
+  })
+})
+
+describe('parseError', () => {
+  it('maps wallet rejection and router reverts to readable text', () => {
+    expect(parseError({ code: 4001 })).toMatch(/rejected/i)
+    expect(parseError({ message: 'execution reverted: UniswapV2Router: INSUFFICIENT_OUTPUT_AMOUNT' })).toMatch(/slippage/i)
+    expect(parseError({ message: 'UniswapV2Router: EXPIRED' })).toMatch(/deadline/i)
+  })
+})

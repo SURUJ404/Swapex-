@@ -1,20 +1,20 @@
 import React, { useState, useEffect } from 'react'
-
-const STORAGE_KEY = 'swapex_transactions'
+import { useWeb3 } from '../context/Web3Context'
+import { getTransactions } from '../lib/txHistory'
+import { explorerTxUrl } from '../lib/config'
 
 export default function TransactionHistory() {
+  const { account, chainId } = useWeb3()
   const [txs, setTxs] = useState([])
 
   useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
-      setTxs(stored)
-    } catch {
-      setTxs([])
-    }
-  }, [])
+    const load = () => setTxs(getTransactions(chainId, account))
+    load()
+    window.addEventListener('swapex-tx', load)
+    return () => window.removeEventListener('swapex-tx', load)
+  }, [account, chainId])
 
-  const etherscanLink = (hash) => `https://etherscan.io/tx/${hash}`
+  const etherscanLink = (hash) => explorerTxUrl(chainId, hash)
 
   if (txs.length === 0) return null
 
@@ -22,8 +22,8 @@ export default function TransactionHistory() {
     <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-6">
       <h2 className="text-lg font-semibold font-display text-[var(--text-primary)] mb-4">Transaction History</h2>
       <div className="space-y-2">
-        {txs.slice().reverse().map((tx, i) => (
-          <div key={i} className="flex items-center justify-between py-2 border-b border-[var(--border)]/50 last:border-0">
+        {txs.slice().reverse().map((tx) => (
+          <div key={tx.hash} className="flex items-center justify-between py-2 border-b border-[var(--border)]/50 last:border-0">
             <div className="flex flex-col">
               <span className="text-sm text-[var(--text-primary)]">{tx.label || 'Transaction'}</span>
               <span className="text-xs text-[var(--text-tertiary)] font-mono">
