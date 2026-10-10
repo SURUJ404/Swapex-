@@ -10,7 +10,15 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Legacy Uniswap interface kept for reference; not part of the Next.js app.
+    "src/**",
   ]),
+  {
+    rules: {
+      // Data-fetching effects set loading/pending state on mount; acceptable here.
+      "react-hooks/set-state-in-effect": "warn",
+    },
+  },
 ]);
 
 export default eslintConfig;
