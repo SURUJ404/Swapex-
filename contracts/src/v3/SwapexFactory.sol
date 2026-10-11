@@ -72,6 +72,7 @@ contract SwapexFactory {
     }
 
     function setOwner(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert ZeroAddress();
         emit OwnerChanged(owner, newOwner);
         owner = newOwner;
     }

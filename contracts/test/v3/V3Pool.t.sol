@@ -50,6 +50,14 @@ contract V3PoolTest is V3Base {
         factory.enableFeeAmount(300, 16384);
     }
 
+    function test_factory_setOwnerRevertsOnZeroAddress() public {
+        // regression: transferring ownership to the zero address would brick the factory
+        vm.expectRevert(SwapexFactory.ZeroAddress.selector);
+        factory.setOwner(address(0));
+        factory.setOwner(address(0xBEEF));
+        assertEq(factory.owner(), address(0xBEEF));
+    }
+
     // ------------------------------------------------------------ initialise
     function test_initialize_setsPrice() public {
         (uint160 sqrtP, int24 tick,, bool unlocked) = pool.slot0();
