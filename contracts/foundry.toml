@@ -15,3 +15,7 @@ via_ir = true                 # swap() has many locals; IR pipeline avoids "stac
 
 [profile.default.fuzz]
 runs = 512
+
+[profile.default.invariant]
+runs = 64
+depth = 30
