@@ -88,6 +88,23 @@ contract MathTest is Test {
         assertLt(TickMath.getSqrtRatioAtTick(tick), TickMath.getSqrtRatioAtTick(tick + 1));
     }
 
+    /// The log2-based getTickAtSqrtRatio must agree exactly with the binary-search oracle.
+    function testFuzz_getTickAtSqrtRatio_matchesBinarySearch(uint160 s) public {
+        s = uint160(bound(uint256(s), uint256(TickMath.MIN_SQRT_RATIO), uint256(TickMath.MAX_SQRT_RATIO) - 1));
+        assertEq(int256(TickMath.getTickAtSqrtRatio(s)), int256(TickMath._tickAtSqrtRatioBinarySearch(s)));
+    }
+
+    /// Same, but sampling in-between prices anchored across the whole tick range (uniform
+    /// coverage of low/mid/high, which pure random uint160 would bias toward the top).
+    function testFuzz_getTickAtSqrtRatio_matchesBinarySearch_acrossRanges(uint256 tickSeed, uint256 offset) public {
+        int24 t = int24(bound(int256(tickSeed), TickMath.MIN_TICK, TickMath.MAX_TICK - 1));
+        uint160 base = TickMath.getSqrtRatioAtTick(t);
+        uint160 nxt = TickMath.getSqrtRatioAtTick(t + 1);
+        uint160 s = base + uint160(bound(offset, 0, uint256(nxt - base)));
+        if (s >= TickMath.MAX_SQRT_RATIO) s = TickMath.MAX_SQRT_RATIO - 1;
+        assertEq(int256(TickMath.getTickAtSqrtRatio(s)), int256(TickMath._tickAtSqrtRatioBinarySearch(s)));
+    }
+
     function test_tickMath_outOfRangeReverts() public {
         vm.expectRevert();
         this.callSqrt(TickMath.MAX_TICK + 1);
