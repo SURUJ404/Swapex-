@@ -46,5 +46,9 @@ contracts/out/
 contracts/cache/
 contracts/broadcast/
 
+# static analysis artifacts
+slither-report.json
+aderyn-report*
+
 __pycache__/
 *.pyc
