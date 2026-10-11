@@ -1,49 +1,23 @@
-# SwapEx
+# Swapex
 
-SwapEx is an MVP decentralized exchange (DEX) that enables users to create tokens and swap them seamlessly on-chain.
-
-## MVP Features
-
-- Token creation and deployment
-- Token-to-token swaps
-- Wallet connection
-- Basic liquidity management
-- Transaction history
-
-## Tech Stack
-
-- Next.js
-- React
-- Solidity
-- Ethers.js
-- Web3 Wallet Integration
-
-## Getting Started
-
-    npm install
-    npm run dev      # http://localhost:3000
-    npm test         # unit tests for the math / error helpers
-    npm run lint
-    npm run build
-
-Open http://localhost:3000 to access the application.
+Monorepo for the Swapex DEX (written from scratch — not a fork of any existing protocol).
 
 ## Layout
 
-- `lib/` pure logic: amount parsing, slippage (integer basis points), routing, errors, tx history
-- `hooks/` balances, allowances, approvals, transaction runner
-- `components/` forms (Swap, Add/Remove liquidity, Send, Create) and shared UI
-- `context/Web3Context.js` wallet + network state (wrong-network detection and switching)
+- `contracts/` — Foundry project: V3-style concentrated-liquidity core (`src/v3`, `src/libraries`),
+  Python reference model (`reference/`), tests (`test/`). See `contracts/README.md`.
+- `apps/web/` — Next.js frontend. See `apps/web/README.md`.
 
-## Config
+## Development
 
-- `NEXT_PUBLIC_CHAIN_ID` (default `1`). Contract addresses must match the chain.
+Contracts (requires [Foundry](https://getfoundry.sh)):
 
-## Vision
+    cd contracts
+    forge install foundry-rs/forge-std --no-git
+    forge build && forge test -vv
 
-Our goal is to simplify tokenization and decentralized trading through a fast, secure, and user-friendly platform.
+Web app:
 
-## Roadmap
-
-See the Uniswap-parity plan: own contracts (Foundry), indexer/subgraph, smart order router,
-Permit2, multi-chain, audits.
+    cd apps/web
+    npm ci
+    npm run dev
