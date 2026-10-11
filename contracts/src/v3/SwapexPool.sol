@@ -10,6 +10,7 @@ import {SwapMath} from "../libraries/SwapMath.sol";
 import {Tick} from "../libraries/Tick.sol";
 import {TickBitmap} from "../libraries/TickBitmap.sol";
 import {TickMath} from "../libraries/TickMath.sol";
+import {Observations} from "../libraries/Observations.sol";
 import {IERC20Minimal} from "../interfaces/IERC20Minimal.sol";
 import {ISwapexFactory} from "../interfaces/ISwapexFactory.sol";
 import {ISwapexMintCallback, ISwapexSwapCallback, ISwapexFlashCallback} from "../interfaces/ICallbacks.sol";
@@ -23,6 +24,7 @@ contract SwapexPool {
     using Position for mapping(bytes32 => Position.Info);
     using Position for Position.Info;
     using SafeCast for uint256;
+    using Observations for Observations.Observation[65535];
 
     // ---------------------------------------------------------------- errors
     error Locked();
@@ -50,6 +52,7 @@ contract SwapexPool {
     event Flash(address indexed sender, address indexed recipient, uint256 amount0, uint256 amount1, uint256 paid0, uint256 paid1);
     event SetProtocolFee(uint8 oldDenominator, uint8 newDenominator);
     event CollectProtocol(address indexed sender, address indexed recipient, uint128 amount0, uint128 amount1);
+    event IncreaseObservationCardinalityNext(uint16 observationCardinalityNextOld, uint16 observationCardinalityNextNew);
 
     // ---------------------------------------------------------------- immutables
     address public immutable factory;
@@ -78,6 +81,12 @@ contract SwapexPool {
     mapping(int16 => uint256) public tickBitmap;
     mapping(bytes32 => Position.Info) public positions;
 
+    // ---------------------------------------------------------------- TWAP oracle
+    Observations.Observation[65535] public observations;
+    uint16 public observationIndex; // index of the newest written observation
+    uint16 public observationCardinality; // number of retained observations (>= 1 after initialize)
+    uint16 public observationCardinalityNext; // ring capacity; grows via increaseObservationCardinalityNext
+
     modifier lock() {
         if (!slot0.unlocked) revert Locked();
         slot0.unlocked = false;
@@ -105,6 +114,10 @@ contract SwapexPool {
         if (slot0.sqrtPriceX96 != 0) revert AlreadyInitialized();
         int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
         slot0 = Slot0({sqrtPriceX96: sqrtPriceX96, tick: tick, protocolFeeDenominator: 0, unlocked: true});
+        observations.initialize();
+        observationIndex = 0;
+        observationCardinality = 1;
+        observationCardinalityNext = 1;
         emit Initialize(sqrtPriceX96, tick);
     }
 
@@ -182,6 +195,12 @@ contract SwapexPool {
     {
         _checkTicks(tickLower, tickUpper);
         Slot0 memory _slot0 = slot0;
+
+        // liquidity changes affect the seconds-per-liquidity integral: capture the elapsed interval
+        // at the pre-operation tick and liquidity before we mutate any state.
+        (observationIndex, observationCardinality) = observations.write(
+            observationIndex, uint32(block.timestamp), _slot0.tick, liquidity, observationCardinality, observationCardinalityNext
+        );
 
         position = _updatePosition(owner, tickLower, tickUpper, liquidityDelta, _slot0.tick);
 
@@ -282,6 +301,11 @@ contract SwapexPool {
                 ? !(sqrtPriceLimitX96 < slot0Start.sqrtPriceX96 && sqrtPriceLimitX96 > TickMath.MIN_SQRT_RATIO)
                 : !(sqrtPriceLimitX96 > slot0Start.sqrtPriceX96 && sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO)
         ) revert InvalidPriceLimit();
+
+        // capture the elapsed interval at the pre-swap tick and liquidity for the TWAP oracle
+        (observationIndex, observationCardinality) = observations.write(
+            observationIndex, uint32(block.timestamp), slot0Start.tick, liquidity, observationCardinality, observationCardinalityNext
+        );
 
         SwapCache memory cache = SwapCache({
             zeroForOne: zeroForOne,
@@ -462,6 +486,52 @@ contract SwapexPool {
             _safeTransfer(token1, recipient, amount1);
         }
         emit CollectProtocol(msg.sender, recipient, amount0, amount1);
+    }
+
+    // ---------------------------------------------------------------- TWAP oracle
+    /// @notice grow the ring-buffer capacity. Takes effect as writes fill the buffer; the retained
+    ///         observation count (`observationCardinality`) only increases up to this value.
+    function increaseObservationCardinalityNext(uint16 cardinalityNext) external {
+        uint16 cardNext = observationCardinalityNext;
+        if (cardinalityNext > cardNext) {
+            observationCardinalityNext = cardinalityNext;
+            emit IncreaseObservationCardinalityNext(cardNext, cardinalityNext);
+        }
+    }
+
+    /// @notice cumulative tick and seconds-per-liquidity at `block.timestamp - secondsAgo[i]` for each entry.
+    /// @dev TWAP over [now - w, now] = (tickCumulatives[last] - tickCumulatives[first]) / w.
+    function observe(uint32[] calldata secondsAgos)
+        external
+        view
+        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativesX128)
+    {
+        return observations.observe(
+            uint32(block.timestamp),
+            secondsAgos,
+            slot0.tick,
+            liquidity,
+            observationIndex,
+            observationCardinality,
+            observationCardinalityNext
+        );
+    }
+
+    /// @notice convenience single-window read of the cumulative values `secondsAgo` seconds ago.
+    function observeSingle(uint32 secondsAgo)
+        external
+        view
+        returns (int56 tickCumulative, uint160 secondsPerLiquidityCumulativeX128)
+    {
+        return observations.observeSingle(
+            uint32(block.timestamp),
+            secondsAgo,
+            slot0.tick,
+            liquidity,
+            observationIndex,
+            observationCardinality,
+            observationCardinalityNext
+        );
     }
 
     // ---------------------------------------------------------------- token helpers
