@@ -10,7 +10,6 @@ import {SwapMath} from "../libraries/SwapMath.sol";
 import {Tick} from "../libraries/Tick.sol";
 import {TickBitmap} from "../libraries/TickBitmap.sol";
 import {TickMath} from "../libraries/TickMath.sol";
-import {IERC20Minimal} from "../interfaces/IERC20Minimal.sol";
 import {currency} from "./types/Currency.sol";
 import {BalanceDelta, toBalanceDelta, amount0, amount1} from "./types/BalanceDelta.sol";
 import {PoolKey, PoolId, toPoolId} from "./types/PoolKey.sol";
@@ -40,8 +39,9 @@ struct ModifyLiquidityParams {
 ///      negative) in transient storage. Inside the unlock callback the caller `settle`s negative
 ///      deltas (paying tokens in) and `take`s positive deltas (withdrawing tokens). When the
 ///      session closes every currency delta must be exactly zero, so multi-hop swaps across pools
-///      net out and move no tokens until the end. Scope: ERC-20 only, no hooks, no native ETH
-///      (Phase 3); protocol fee omitted.
+///      net out and move no tokens until the end. Native currency (address(0)) is a first-class
+///      currency: settle accepts ETH via msg.value and take sends it. Hooks and protocol fee are
+///      Phase 3 scope.
 contract PoolManager {
     using Tick for mapping(int24 => Tick.Info);
     using TickBitmap for mapping(int16 => uint256);
@@ -65,7 +65,8 @@ contract PoolManager {
     error UnsettledDelta();
     error DeltaNotNegative();
     error InsufficientTake();
-    error TransferFailed();
+    error NativeSettleAmountMismatch();
+    error UnexpectedEth();
     error LiquidityDeltaOverflow();
 
     // ---------------------------------------------------------------- events
@@ -410,17 +411,27 @@ contract PoolManager {
     }
 
     // ---------------------------------------------------------------- settlement
-    /// @notice pay the full amount owed for `c` (pulls tokens from the caller); clears the delta.
-    function settle(currency c) external onlyUnlocked returns (uint256 amount) {
+    /// @notice pay the amount owed for `c` and clear the delta. For an ERC-20 this pulls the
+    ///         tokens from the caller via `transferFrom`; for the native currency the caller must
+    ///         send exactly the owed amount as `msg.value` with this call (the ETH is already in
+    ///         the manager when the body runs).
+    function settle(currency c) external payable onlyUnlocked returns (uint256 amount) {
         int256 delta = _getDelta(c);
         if (delta >= 0) revert DeltaNotNegative();
         amount = uint256(-delta);
-        if (!IERC20Minimal(currency.unwrap(c)).transferFrom(msg.sender, address(this), amount)) revert TransferFailed();
+        if (c.isNative()) {
+            if (msg.value != amount) revert NativeSettleAmountMismatch();
+        } else {
+            if (msg.value != 0) revert UnexpectedEth();
+            c.transferFrom(msg.sender, address(this), amount);
+        }
         reserves[c] += amount;
         _setDelta(c, 0);
     }
 
     /// @notice withdraw `amount` of `c` that the pool owes the caller; reduces the positive delta.
+    ///         Sends ETH when `c` is the native currency. Effects are applied before the transfer
+    ///         (checks-effects-interactions), so a re-entering recipient sees the updated state.
     function take(currency c, address to, uint256 amount) external onlyUnlocked {
         int256 delta = _getDelta(c);
         if (delta < int256(amount)) revert InsufficientTake();
@@ -429,7 +440,7 @@ contract PoolManager {
             // delta >= amount > 0 was checked above, so the subtraction cannot go negative
             _setDelta(c, delta - int256(amount));
         }
-        if (!IERC20Minimal(currency.unwrap(c)).transfer(to, amount)) revert TransferFailed();
+        c.transfer(to, amount);
     }
 
     // ---------------------------------------------------------------- views
