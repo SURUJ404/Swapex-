@@ -131,3 +131,46 @@ golden-vector differential, so the Solidity and Python agree bit-for-bit. Keepin
 convention end-to-end (rather than switching between "pool-receives" and "caller-owes") avoids
 the classic sign bugs in multi-hop settlement; the one place V3's convention appears (the swap
 loop's raw amounts) is isolated and negated exactly once with a comment.
+
+## D16 — Native settle uses payable `msg.value`, not a sync/balance-diff
+**Decision:** `PoolManager.settle` is `payable`. For an ERC-20 it `transferFrom`s the caller as
+before; for the native currency (`address(0)`) it requires `msg.value == amount` owed and treats
+the ETH as already received. `take` sends ETH via the currency helper for native.
+**Rationale:** The V4-style `sync`/balance-diff pattern (snapshot balance, send ETH, settle the
+delta) needs extra state and is easier to get wrong. Requiring an exact `msg.value` is simpler,
+cannot be under- or over-paid (mismatch reverts `NativeSettleAmountMismatch`), and keeps a single
+settlement code path for both currency kinds. A native pool always sorts `address(0)` as
+`currency0`, so the delta/settle/take math is identical to ERC-20 — only the transfer mechanism
+branches.
+
+## D17 — Hooks are gated by mined address bits and are untrusted
+**Decision:** A hook's permissions are the low bits of its contract address (deployer mines a
+CREATE2 salt). The manager calls a hook function only when the matching flag is set, so a hook
+implements only what it flags. `initialize` runs `Hooks.validate` to reject non-mined addresses.
+**Rationale:** Encoding permissions in the address (rather than an on-chain registry or a flag on
+the pool) makes "does this pool have hook X at point Y" a pure address check with no storage
+read, and it is the scheme the V4 design doc calls for. The manager treats hooks as untrusted:
+value safety never depends on hook honesty — `swap`/`modifyLiquidity` are `onlyUnlocked`, so a
+re-entering hook acts inside the same flash-accounting session, and the net-zero sweep guarantees
+no delta is left non-zero. Address mining is an off-chain concern; on-chain validation only
+rejects obviously-unmined addresses (a stray bit in the reserved low 3 bits).
+
+## D18 — Dynamic fee via a dedicated `getSwapFee` getter (return-delta deferred)
+**Decision:** When a hook's address carries the `DYNAMIC_FEE` flag, the manager queries
+`IHooks.getSwapFee(key)` and charges that lp fee for the swap instead of `key.fee`. The V4-style
+"beforeSwap returns a BalanceDelta that adjusts settlement" (hook donates/takes tokens) is **not**
+wired and is a documented follow-up.
+**Rationale:** A dedicated getter is simple, testable (the dynamic-fee hook test asserts a higher
+fee reduces output), and cannot accidentally entangle hook accounting with the caller's delta.
+Return-delta settlement touches the core flash-accounting path and deserves its own
+reference-checked increment rather than being bolted on; deferring it keeps Phase 3 correct.
+
+## D19 — Router holds input tokens momentarily (pull → approve → settle)
+**Decision:** For an ERC-20 input the user approves the **Router**. Inside the unlock callback the
+Router pulls the input from the user, approves the manager, and calls `settle` (which pulls
+Router→manager). Native input is sent as `msg.value` and settled from the Router's balance.
+**Rationale:** The manager's `settle` pulls from `msg.sender` (the Router), so the Router must
+momentarily hold the tokens. This is the standard periphery pattern (Uniswap V2/V3/V4 routers all
+do this) and means users approve one trusted Router rather than the core manager. Multi-hop is
+chained by reading each hop's intermediate delta after it executes, so intermediate currencies net
+to zero and only the first input / last output move.

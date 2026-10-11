@@ -65,6 +65,21 @@ This is exercised by `test_unsettledDelta_reverts` and `test_nestedUnlock_revert
 (`test/v4/PoolManager.t.sol`). Settlement uses `transferFrom`/`transfer` return values (revert
 `TransferFailed` on `false`), matching the V3 `_safeTransfer` posture.
 
+## Phase 3 — native ETH, hooks, Router (Slither)
+
+Re-ran Slither 0.11.6 over `src/` (now including `src/v4/hooks/`, `src/v4/periphery/`, and the
+native-ETH currency helpers). No new high/medium findings that represent a real defect. Triage:
+
+| Detector | Location (v3/v4) | Why it is safe |
+|---|---|---|
+| `arbitrary-send-erc20` | `CurrencyLibrary.transferFrom` (`src/v4/types/Currency.sol`) | **False positive.** The library is a generic wrapper; every call site passes a trusted `from`: `PoolManager.settle` uses `msg.sender`, and `Router._settleOrTake` uses `_payer` (captured from `msg.sender` at entry). `from` is never attacker-controlled. A reentrant hook cannot corrupt `_payer` because a re-entrant `Router` entry that hits `AlreadyUnlocked` reverts, rolling back the storage write. |
+| `reentrancy-no-eth` | `PoolManager._initialize` / `_modifyLiquidity` / `_swap` (hook callbacks followed by state writes) | **By design — hooks are untrusted.** `before*`/`after*` hooks may re-enter. Value safety does not rely on hooks being honest: (a) `swap`/`modifyLiquidity` are `onlyUnlocked`, so a re-entering hook acts inside the same flash-accounting session, and the end-of-session net-zero sweep (`UnsettledDelta`) guarantees no currency delta can be left non-zero — a hook cannot extract value it did not settle. (b) `initialize` moves no tokens, so the `beforeInitialize`→`slot0` write ordering carries no fund risk (worst case is a benign double-init of the same pool). Verified by the hook tests (`test/v4/Hooks.t.sol`) and the unsettled/nested-unlock tests. |
+| `calls-loop` | `Router._doMulti` (loop over hop pools) | **By design.** The loop is bounded by the user-supplied path length; each `pm.swap` is atomic and the net-zero sweep still applies at session end. Not an unbounded or attacker-driven loop. |
+| `uninitialized-local` | `PoolManager._updatePosition` `flippedLower`/`flippedUpper` | Same known false positive as Phase 1/2 (assigned inside `if (ld != 0)`, read under the same guard). |
+| `low-level-calls` | `CurrencyLibrary.transfer` (native `to.call{value:}`) | **By design.** Sending native ETH requires a low-level call; failure reverts `NativeCurrencyTransferFailed`. The ERC-20 branches use the checked `IERC20Minimal` interface. |
+| `cyclomatic-complexity` | `PoolManager._swap` (27) | **By design**, same rationale as the V3 `swap` above: the tick-crossing loop is inherently branchy and mirrors the reference model 1:1. |
+| `reentrancy-benign` / `reentrancy-events` / `unused-return` / `missing-zero-check` / `assembly` / `costly-loop` / `dead-code` / `too-many-digits` | various | Informational / heuristics already triaged in Phase 1/2; the V4 additions (`tstore`/`tload` assembly, hook event ordering) follow the same accepted patterns. |
+
 
 **Status: not run in this environment (Windows).** Aderyn ships no Windows prebuilt binary
 (the GitHub releases contain only `*-apple-darwin` artifacts), and building from source fails:
