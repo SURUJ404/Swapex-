@@ -14,7 +14,7 @@ def lsb(x):
 
 
 class Pool:
-    def __init__(self, fee, spacing, sqrt_price):
+    def __init__(self, fee, spacing, sqrt_price, cardinality_next=1):
         self.fee, self.spacing = fee, spacing
         self.sqrt, self.tick = sqrt_price, tick_at_sqrt_ratio(sqrt_price)
         self.L = 0
@@ -25,6 +25,16 @@ class Pool:
         self.bitmap = {}  # word -> int
         self.pos = {}  # (owner, lo, hi) -> dict
         self.bal0 = self.bal1 = 0
+
+        # ---- TWAP oracle: observation ring buffer (mirrors Observations.sol) ----
+        self.now = 0  # block.timestamp; tests advance this
+        self.cardinality_next = max(1, cardinality_next)
+        self.obs_index = 0  # index of newest written observation
+        self.obs = {}  # index -> dict(ts, tickCum, sPLCum, init)
+        self.ground_truth = []  # (ts_start, ts_end, tick, L) integrated intervals (validation only)
+        # bootstrap observation at initialize (t=0, cumulatives zeroed)
+        self.obs[0] = dict(ts=0, tickCum=0, sPLCum=0, init=True)
+        self.obs_cardinality = 1
 
     # ---- bitmap ----
     def _position(self, compressed):
@@ -86,6 +96,7 @@ class Pool:
 
     def _modify(self, owner, lo, hi, delta):
         assert lo < hi and MIN_TICK <= lo and hi <= MAX_TICK and lo % self.spacing == 0 and hi % self.spacing == 0
+        self._write_observation()  # liquidity changes affect seconds-per-liquidity; capture interval up to now
         key = (owner, lo, hi)
         p = self.pos.setdefault(key, dict(liq=0, f0=0, f1=0, o0=0, o1=0))
         fl = fu = False
@@ -147,9 +158,108 @@ class Pool:
         self.bal1 -= c1
         return c0, c1
 
+    # ---- TWAP oracle (mirrors src/v3/Observations.sol) ----
+    def _write_observation(self):
+        """Advance cumulatives from the newest observation to self.now using the CURRENT
+        (pre-operation) tick and liquidity, then store a new observation in the ring buffer."""
+        last = self.obs[self.obs_index]
+        delta = self.now - last['ts']
+        # ground truth: record the interval integrated at the pre-op tick/L
+        self.ground_truth.append((last['ts'], self.now, self.tick, self.L))
+        tick_cum = last['tickCum'] + self.tick * delta
+        if self.L > 0:
+            spl_cum = last['sPLCum'] + ((delta << 128) // self.L)
+        else:
+            spl_cum = last['sPLCum']  # L == 0: carry forward (no liquidity to average over)
+
+        cn = self.cardinality_next
+        updated_cardinality = self.obs_cardinality
+        if cn > self.obs_cardinality and self.obs_index == self.obs_cardinality - 1:
+            updated_cardinality = self.obs_cardinality + 1
+        next_index = (self.obs_index + 1) % cn
+        self.obs[next_index] = dict(ts=self.now, tickCum=tick_cum, sPLCum=spl_cum, init=True)
+        self.obs_index = next_index
+        self.obs_cardinality = updated_cardinality
+
+    def increase_observation_cardinality_next(self, n):
+        """Grow the ring-buffer capacity (persisted across writes like the Solidity impl)."""
+        if n > self.cardinality_next:
+            self.cardinality_next = n
+
+    def _obs_list(self):
+        """Return populated observations in chronological order (oldest first)."""
+        if self.obs_cardinality == 0:
+            return []
+        out = []
+        # newest is at obs_index; walk back obs_cardinality entries around the ring
+        cn = self.cardinality_next
+        idx = self.obs_index
+        for _ in range(self.obs_cardinality):
+            out.append(self.obs[idx])
+            idx = (idx - 1) % cn
+        out.reverse()
+        return out
+
+    def _observe_single(self, target):
+        """Cumulative tick and seconds-per-liquidity at absolute time `target`."""
+        newest = self.obs[self.obs_index]
+        if target >= newest['ts']:
+            # between newest observation and now: constant current tick/L
+            dt = target - newest['ts']
+            tc = newest['tickCum'] + self.tick * dt
+            spl = newest['sPLCum'] + (((dt << 128) // self.L) if self.L > 0 else 0)
+            return tc, spl
+
+        ordered = self._obs_list()
+        if target <= ordered[0]['ts']:
+            # target predates the oldest stored observation: window exceeds available data,
+            # return the oldest cumulative (best available). Matches truncation semantics.
+            return ordered[0]['tickCum'], ordered[0]['sPLCum']
+        # find surrounding pair: before_or_at (ts <= target) and at_or_after (ts >= target)
+        before, after = None, None
+        for i in range(len(ordered) - 1):
+            a, b = ordered[i], ordered[i + 1]
+            if a['ts'] <= target <= b['ts']:
+                before, after = a, b
+                break
+        if before is None:
+            # fallback (shouldn't happen given bounds above)
+            return ordered[-1]['tickCum'], ordered[-1]['sPLCum']
+        if target == before['ts']:
+            return before['tickCum'], before['sPLCum']
+        if target == after['ts']:
+            return after['tickCum'], after['sPLCum']
+        # linear interpolation between surrounding observations
+        # (exact for tickCum: tick constant within an interval; may floor for sPL)
+        span = after['ts'] - before['ts']
+        dt = target - before['ts']
+        if span == 0:
+            return before['tickCum'], before['sPLCum']
+        tc = before['tickCum'] + ((after['tickCum'] - before['tickCum']) // span) * dt
+        spl = before['sPLCum'] + (((after['sPLCum'] - before['sPLCum']) // span) * dt)
+        return tc, spl
+
+    def observe(self, seconds_agos):
+        """Return (tickCumulatives, secondsPerLiquidityCumulatives) for each secondsAgo."""
+        tick_cum, spl_cum = [], []
+        for ago in seconds_agos:
+            tc, spl = self._observe_single(self.now - ago)
+            tick_cum.append(tc)
+            spl_cum.append(spl)
+        return tick_cum, spl_cum
+
+    def twap_tick(self, seconds_ago):
+        """Time-weighted average tick over [now-seconds_ago, now] via observe()."""
+        tc, _ = self.observe([seconds_ago, 0])
+        dt = seconds_ago
+        if dt == 0:
+            return self.tick
+        return (tc[1] - tc[0]) // dt
+
     def swap(self, zfo, amount, limit):
         assert amount != 0
         assert (MIN_SQRT_RATIO < limit < self.sqrt) if zfo else (self.sqrt < limit < MAX_SQRT_RATIO)
+        self._write_observation()  # capture interval up to now at pre-op tick/L
         exact_in = amount > 0
         rem, calc = amount, 0
         sp, tick, L = self.sqrt, self.tick, self.L
