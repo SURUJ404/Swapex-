@@ -1,4 +1,4 @@
-# Security notes — Swapex V3-style core
+# Security notes — Swapex core
 
 This file records the output of automated static analysis and the reasoning for every
 finding: fixed, accepted (with justification), or false positive. The goal is a paper trail,
@@ -6,10 +6,10 @@ not a green badge.
 
 Tools run against `src/` (production contracts only; `test/`, `lib/`, `reference/` filtered out):
 
-- **Slither** 0.11.6 (solc 0.8.26): 17 contracts, 102 detectors → **20 findings** across 8 detectors.
+- **Slither** 0.11.6 (solc 0.8.26): see per-phase counts below.
 - **Aderyn**: see below.
 
-## Slither findings (triaged)
+## Phase 1 — V3-style core (Slither)
 
 ### Fixed
 
@@ -47,7 +47,24 @@ that attempts to re-enter `swap`/`collect` on every transfer and asserts
 | `low-level-calls` | 2 | `_balance` (staticcall) and `_safeTransfer` (call) use low-level calls deliberately so the pool works with non-standard ERC-20s (no-return-value / USDT-style tokens). `_safeTransfer` treats `ret.length == 0` as success and reverts `TokenTransferFailed` on `false` or a failed call; `_balance` reverts `BalanceCheckFailed` on a failed/malformed `balanceOf`. Exercised by `NoReturnTokenTest` and `RevertingTokenTest`. |
 | `cyclomatic-complexity` | 1 | `swap()` has complexity 30. The tick-crossing loop is inherently branchy (exact-in/out × zero-for-one × protocol-fee on/off × tick-cross vs price-move). Refactoring would obscure the 1:1 correspondence with the Python reference model (`reference/poolmodel.py`), which is the correctness oracle. Not worth the readability/maintenance cost. |
 
-## Aderyn
+## Phase 2 — V4 PoolManager (Slither)
+
+Re-ran Slither 0.11.6 over `src/` (now including `src/v4/`). **No new high/medium findings
+specific to the PoolManager.** The detectors that fire on the V4 code are the same two
+benign classes already triaged above:
+
+| Detector | Location (v4) | Why it is safe |
+|---|---|---|
+| `uninitialized-local` | `PoolManager._updatePosition` `flippedLower`/`flippedUpper`; `PoolManager.swap` `step` | Same false positive as Phase 1: the bools are assigned inside `if (ld != 0)` and read under the same guard; `step` is a `memory` struct that Solidity zero-initializes. No path reads an uninitialized value. |
+| `incorrect-exp` | `FullMath.mulDiv` (`inv = (3 * denominator) ^ 2`) | **Known false positive, pre-existing.** The `^` is a deliberate bitwise XOR, part of the Newton-Raphson modular-inverse refinement, *not* exponentiation. Identical to Uniswap V2/V3 `FullMath`. Not introduced by Phase 2. |
+
+The V4-specific reentrancy surface (the `unlock` callback) is **by design**: nested `unlock`
+reverts `AlreadyUnlocked`, and the end-of-session net-zero sweep (`UnsettledDelta`) guarantees
+no currency delta can be left non-zero, so a callback cannot extract value it did not settle.
+This is exercised by `test_unsettledDelta_reverts` and `test_nestedUnlock_reverts`
+(`test/v4/PoolManager.t.sol`). Settlement uses `transferFrom`/`transfer` return values (revert
+`TransferFailed` on `false`), matching the V3 `_safeTransfer` posture.
+
 
 **Status: not run in this environment (Windows).** Aderyn ships no Windows prebuilt binary
 (the GitHub releases contain only `*-apple-darwin` artifacts), and building from source fails:

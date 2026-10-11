@@ -90,3 +90,44 @@ rather than `vm.warp(block.timestamp + N)`.
 as an absolute warp to the first computed value), which left `block.timestamp` stuck and
 caused `time - secondsAgo` to underflow in `observe`. Absolute warps are unambiguous and
 robust regardless of cheatcode behavior.
+
+## D12 — PoolManager reuses the V3 math libraries verbatim
+**Decision:** The V4-style singleton re-keys per-pool state under `PoolId` but calls the
+Phase 1 libraries (`Tick`, `TickBitmap`, `Position`, `SqrtPriceMath`, `SwapMath`, `FullMath`,
+`LiquidityMath`, `SafeCast`) unchanged.
+**Rationale:** Those libraries are the reference-checked core of Phase 1 (golden vectors +
+differential tests). Re-writing them for the manager would duplicate ~1000 lines of dense
+math and risk divergence for zero benefit. Only the *orchestration* (flash-accounting deltas,
+singleton storage layout) is new.
+
+## D13 — Transient storage via inline `tstore`/`tload` (solc 0.8.26 has no `transient` keyword)
+**Decision:** The per-currency delta and the `unlocked` reentrancy lock live in transient
+storage, addressed with inline-assembly `tstore`/`tload` at keccak-derived / fixed slots.
+**Rationale:** Flash-accounting deltas are hot (read/written many times per swap) and are
+guaranteed zero at the end of every `unlock`, so transient storage avoids repeated cold
+SSTOREs and is cleared automatically at tx end. solc 0.8.26 supports the `tstore`/`tload`
+opcodes (cancun) but not the high-level `transient` state-variable keyword or `transient`
+mappings (those arrived in 0.8.28), so the accessors are hand-written assembly with a salt to
+avoid cross-contract slot collisions.
+
+## D14 — Flash-accounting safety: net-zero sweep over touched currencies
+**Decision:** `unlock` records every currency whose delta becomes non-zero and, before
+releasing the lock, iterates them and reverts `UnsettledDelta` unless each delta is exactly
+zero.
+**Rationale:** This is the core flash-accounting invariant. Without it, a callback could
+`take` tokens and leave the corresponding negative (owed) delta unsettled, effectively
+stealing from the pool. Checking only the *sum* is insufficient (a +X on one currency and −X
+on another would net to zero while both are wrong), so the sweep is per-currency. The
+touched-list is persistent only for the duration of the session and is reset each time; the
+deltas themselves are transient. Verified by `test_unsettledDelta_reverts` and the
+`check_v4.py` multihop net-to-zero check.
+
+## D15 — `BalanceDelta` / `currencyDelta` use the caller-owes sign convention
+**Decision:** A positive delta means the pool owes the caller (the caller may `take`); a
+negative delta means the caller owes the pool (the caller must `settle`). The V3-style swap
+amounts (positive = caller owes) are negated once when folded into `currencyDelta`.
+**Rationale:** This matches the reference model (`v4model.py`), the V4 design doc, and the
+golden-vector differential, so the Solidity and Python agree bit-for-bit. Keeping a single
+convention end-to-end (rather than switching between "pool-receives" and "caller-owes") avoids
+the classic sign bugs in multi-hop settlement; the one place V3's convention appears (the swap
+loop's raw amounts) is isolated and negated exactly once with a comment.
