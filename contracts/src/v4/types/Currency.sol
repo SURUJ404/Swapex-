@@ -59,4 +59,11 @@ library CurrencyLibrary {
         if (isNative(self)) revert NativeCurrencyNotTransferable();
         if (!IERC20Minimal(currency.unwrap(self)).transferFrom(from, to, amount)) revert ERC20TransferFailed();
     }
+
+    /// @notice approve `spender` to pull `amount` of an ERC-20 `self` from this contract. Native
+    ///         currency needs no allowance (it moves only via payable settle/take).
+    function approve(currency self, address spender, uint256 amount) internal {
+        if (isNative(self)) revert NativeCurrencyNotTransferable();
+        if (!IERC20Minimal(currency.unwrap(self)).approve(spender, amount)) revert ERC20TransferFailed();
+    }
 }
