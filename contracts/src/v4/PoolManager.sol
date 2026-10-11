@@ -13,6 +13,8 @@ import {TickMath} from "../libraries/TickMath.sol";
 import {currency} from "./types/Currency.sol";
 import {BalanceDelta, toBalanceDelta, amount0, amount1} from "./types/BalanceDelta.sol";
 import {PoolKey, PoolId, toPoolId} from "./types/PoolKey.sol";
+import {Hooks} from "./libraries/Hooks.sol";
+import {IHooks} from "./interfaces/IHooks.sol";
 
 /// @notice Called back inside `unlock` so the caller can settle/take against accumulated deltas.
 interface IUnlockCallback {
@@ -176,13 +178,36 @@ contract PoolManager {
 
     // ---------------------------------------------------------------- setup
     function initialize(PoolKey memory key, uint160 sqrtPriceX96) external returns (int24 tick) {
+        return _initialize(key, sqrtPriceX96, new bytes(0));
+    }
+
+    function initialize(PoolKey memory key, uint160 sqrtPriceX96, bytes memory hookData)
+        external
+        returns (int24 tick)
+    {
+        return _initialize(key, sqrtPriceX96, hookData);
+    }
+
+    function _initialize(PoolKey memory key, uint160 sqrtPriceX96, bytes memory hookData)
+        private
+        returns (int24 tick)
+    {
         if (currency.unwrap(key.currency0) >= currency.unwrap(key.currency1)) revert CurrencyNotSorted();
         if (key.tickSpacing <= 0) revert InvalidTickSpacing();
+        address h = key.hooks;
+        if (h != address(0)) Hooks.validate(h);
         PoolId id = key.toPoolId();
         Pool storage pool = pools[id];
         if (pool.slot0.sqrtPriceX96 != 0) revert PoolAlreadyInitialized();
+
+        if (h != address(0) && Hooks.hasPermission(h, Hooks.BEFORE_INITIALIZE_FLAG)) {
+            IHooks(h).beforeInitialize(key, sqrtPriceX96, hookData);
+        }
         tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
         pool.slot0 = Slot0({sqrtPriceX96: sqrtPriceX96, tick: tick});
+        if (h != address(0) && Hooks.hasPermission(h, Hooks.AFTER_INITIALIZE_FLAG)) {
+            IHooks(h).afterInitialize(key, sqrtPriceX96, tick, hookData);
+        }
         emit Initialize(id, tick);
     }
 
@@ -208,8 +233,19 @@ contract PoolManager {
 
     /// @notice swap within one pool; the resulting delta is accumulated into flash accounting.
     /// @return callerDelta caller-owes convention (positive = pool owes caller).
-    function swap(PoolKey memory key, SwapParams memory params)
+    function swap(PoolKey memory key, SwapParams memory params) external returns (BalanceDelta callerDelta) {
+        return _swap(key, params, new bytes(0));
+    }
+
+    function swap(PoolKey memory key, SwapParams memory params, bytes memory hookData)
         external
+        returns (BalanceDelta callerDelta)
+    {
+        return _swap(key, params, hookData);
+    }
+
+    function _swap(PoolKey memory key, SwapParams memory params, bytes memory hookData)
+        private
         onlyUnlocked
         returns (BalanceDelta callerDelta)
     {
@@ -217,6 +253,18 @@ contract PoolManager {
         PoolId id = key.toPoolId();
         Pool storage pool = pools[id];
         if (pool.slot0.sqrtPriceX96 == 0) revert PoolNotInitialized();
+
+        // resolve the effective lp fee (a dynamic-fee hook overrides key.fee) and run beforeSwap
+        address h = key.hooks;
+        uint24 lpFee = key.fee;
+        if (h != address(0)) {
+            if (Hooks.hasPermission(h, Hooks.BEFORE_SWAP_FLAG)) {
+                IHooks(h).beforeSwap(key, params, hookData);
+            }
+            if (Hooks.hasPermission(h, Hooks.DYNAMIC_FEE_FLAG)) {
+                lpFee = IHooks(h).getSwapFee(key);
+            }
+        }
 
         Slot0 memory slot0Start = pool.slot0;
         bool zeroForOne = params.zeroForOne;
@@ -256,7 +304,7 @@ contract PoolManager {
                     : step.sqrtPriceNextX96,
                 state.liquidity,
                 state.amountSpecifiedRemaining,
-                key.fee
+                lpFee
             );
 
             if (exactInput) {
@@ -310,12 +358,30 @@ contract PoolManager {
         _accountDelta(key.currency0, -amount0Raw);
         _accountDelta(key.currency1, -amount1Raw);
 
+        if (h != address(0) && Hooks.hasPermission(h, Hooks.AFTER_SWAP_FLAG)) {
+            IHooks(h).afterSwap(key, params, callerDelta, hookData);
+        }
+
         emit Swap(id, -amount0Raw, -amount1Raw, state.sqrtPriceX96, state.liquidity, state.tick);
     }
 
     // ---------------------------------------------------------------- liquidity
     function modifyLiquidity(PoolKey memory key, ModifyLiquidityParams memory params)
         external
+        returns (BalanceDelta callerDelta, BalanceDelta feesAccrued)
+    {
+        return _modifyLiquidity(key, params, new bytes(0));
+    }
+
+    function modifyLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
+        external
+        returns (BalanceDelta callerDelta, BalanceDelta feesAccrued)
+    {
+        return _modifyLiquidity(key, params, hookData);
+    }
+
+    function _modifyLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
+        private
         onlyUnlocked
         returns (BalanceDelta callerDelta, BalanceDelta feesAccrued)
     {
@@ -323,6 +389,18 @@ contract PoolManager {
         Pool storage pool = pools[id];
         if (pool.slot0.sqrtPriceX96 == 0) revert PoolNotInitialized();
         _checkTicks(params.tickLower, params.tickUpper, key.tickSpacing);
+
+        address h = key.hooks;
+        bool isAdd = params.liquidityDelta > 0;
+        bool isRemove = params.liquidityDelta < 0;
+        if (h != address(0)) {
+            if (isAdd && Hooks.hasPermission(h, Hooks.BEFORE_ADD_LIQUIDITY_FLAG)) {
+                IHooks(h).beforeAddLiquidity(key, params, hookData);
+            } else if (isRemove && Hooks.hasPermission(h, Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG)) {
+                IHooks(h).beforeRemoveLiquidity(key, params, hookData);
+            }
+        }
+
         Slot0 memory _slot0 = pool.slot0;
 
         int128 ld = _toInt128(params.liquidityDelta);
@@ -354,6 +432,14 @@ contract PoolManager {
         feesAccrued = toBalanceDelta(fees0, fees1);
         _accountDelta(key.currency0, -principal0 + fees0);
         _accountDelta(key.currency1, -principal1 + fees1);
+
+        if (h != address(0)) {
+            if (isAdd && Hooks.hasPermission(h, Hooks.AFTER_ADD_LIQUIDITY_FLAG)) {
+                IHooks(h).afterAddLiquidity(key, params, callerDelta, hookData);
+            } else if (isRemove && Hooks.hasPermission(h, Hooks.AFTER_REMOVE_LIQUIDITY_FLAG)) {
+                IHooks(h).afterRemoveLiquidity(key, params, callerDelta, hookData);
+            }
+        }
 
         emit ModifyLiquidity(id, msg.sender, params.tickLower, params.tickUpper, params.liquidityDelta, -principal0, -principal1);
     }
