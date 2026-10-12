@@ -72,6 +72,7 @@ contract PoolManager {
     error LiquidityDeltaOverflow();
     error NotOwner();
     error InvalidProtocolFee();
+    error NoLiquidityToAccrue();
 
     // ---------------------------------------------------------------- events
     event Initialize(PoolId indexed id, int24 tick);
@@ -452,6 +453,41 @@ contract PoolManager {
         emit Swap(id, -amount0Raw, -amount1Raw, state.sqrtPriceX96, state.liquidity, state.tick);
     }
 
+    // ---------------------------------------------------------------- donate
+    /// @notice donate `amount0`/`amount1` directly to a pool's in-range LPs by crediting them to
+    ///         the fee growth (they are paid out on the next liquidity-remove/claim, like fees).
+    ///         Donations go to LPs, not the protocol. Must be called inside an unlock session: the
+    ///         donor's deltas go negative (they owe the manager) and are settled as usual.
+    function donate(PoolKey memory key, uint256 amount0, uint256 amount1)
+        external
+        onlyUnlocked
+        returns (BalanceDelta callerDelta)
+    {
+        if (amount0 == 0 && amount1 == 0) revert ZeroAmount();
+        PoolId id = key.toPoolId();
+        Pool storage pool = pools[id];
+        if (pool.slot0.sqrtPriceX96 == 0) revert PoolNotInitialized();
+        // a donation is credited as extra fees per unit of in-range liquidity; with no liquidity
+        // there is nobody to accrue it to (and the fee-growth division would be by zero)
+        if (pool.liquidity == 0) revert NoLiquidityToAccrue();
+
+        if (amount0 > 0) {
+            unchecked {
+                pool.feeGrowthGlobal0X128 += FullMath.mulDiv(amount0, 1 << 128, pool.liquidity);
+            }
+        }
+        if (amount1 > 0) {
+            unchecked {
+                pool.feeGrowthGlobal1X128 += FullMath.mulDiv(amount1, 1 << 128, pool.liquidity);
+            }
+        }
+
+        // the donor owes the manager both donated amounts (caller-owes: negative = caller owes pool)
+        callerDelta = toBalanceDelta(-amount0.toInt256(), -amount1.toInt256());
+        _accountDelta(key.currency0, callerDelta.amount0());
+        _accountDelta(key.currency1, callerDelta.amount1());
+    }
+
     // ---------------------------------------------------------------- liquidity
     function modifyLiquidity(PoolKey memory key, ModifyLiquidityParams memory params)
         external
@@ -624,6 +660,11 @@ contract PoolManager {
 
     function getLiquidity(PoolKey memory key) external view returns (uint128) {
         return pools[key.toPoolId()].liquidity;
+    }
+
+    function getFeeGrowthGlobals(PoolKey memory key) external view returns (uint256 feeGrowthGlobal0X128, uint256 feeGrowthGlobal1X128) {
+        Pool storage pool = pools[key.toPoolId()];
+        return (pool.feeGrowthGlobal0X128, pool.feeGrowthGlobal1X128);
     }
 
     function getCurrencyDelta(currency c) external view returns (int256) {
