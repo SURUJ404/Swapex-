@@ -1,66 +1,45 @@
-import { Contract } from 'ethers'
-import { FACTORY_ADDRESS, FACTORY_ABI, ROUTER_ADDRESS, ROUTER_ABI, PAIR_ABI } from '../constants'
-import { WETH_ADDRESS } from './config'
-import { priceImpact } from './amounts'
-
-const ZERO = '0x0000000000000000000000000000000000000000'
-
-export function toPathAddress(token) {
-  return token.address === 'NATIVE' ? WETH_ADDRESS : token.address
-}
-
-/** Candidate paths: direct, and via WETH when neither side is WETH. */
-export function candidatePaths(tokenIn, tokenOut) {
-  const a = toPathAddress(tokenIn)
-  const b = toPathAddress(tokenOut)
-  if (a.toLowerCase() === b.toLowerCase()) return []
-  const paths = [[a, b]]
-  if (a.toLowerCase() !== WETH_ADDRESS.toLowerCase() && b.toLowerCase() !== WETH_ADDRESS.toLowerCase()) {
-    paths.push([a, WETH_ADDRESS, b])
-  }
-  return paths
-}
-
-async function hopReserves(library, tokenA, tokenB) {
-  const factory = new Contract(FACTORY_ADDRESS, FACTORY_ABI, library)
-  const pairAddr = await factory.getPair(tokenA, tokenB)
-  if (pairAddr === ZERO) return null
-  const pair = new Contract(pairAddr, PAIR_ABI, library)
-  const [t0, r] = await Promise.all([pair.token0(), pair.getReserves()])
-  const aIs0 = t0.toLowerCase() === tokenA.toLowerCase()
-  return { reserveIn: aIs0 ? r._reserve0 : r._reserve1, reserveOut: aIs0 ? r._reserve1 : r._reserve0 }
-}
+import { utils } from 'ethers'
+import { buildPoolKey, isZeroForOne, quoteExactInputSingle, getPoolState, priceFromSqrt, toCurrencyAddress } from './pool'
 
 /**
- * Quote every candidate path on-chain and return the one with the best output.
- * Returns null when no route has liquidity.
+ * Quote a direct (single-hop) swap between two tokens through the on-chain Quoter and return the
+ * best available result in the shape the swap UI expects: `{ amountOut, path, impact, key,
+ * zeroForOne }`. Replaces the V2 factory/router path search — a V4 pool is uniquely identified by
+ * its PoolKey, so there is exactly one direct pool per pair per fee tier.
  */
 export async function findBestRoute(library, tokenIn, tokenOut, amountIn) {
-  const router = new Contract(ROUTER_ADDRESS, ROUTER_ABI, library)
-  const results = await Promise.allSettled(
-    candidatePaths(tokenIn, tokenOut).map(async (path) => {
-      const amounts = await router.getAmountsOut(amountIn, path)
-      const amountOut = amounts[amounts.length - 1]
-      if (amountOut.lte(0)) throw new Error('no output')
-      let impact = null
-      try {
-        const hops = await Promise.all(path.slice(0, -1).map((p, i) => hopReserves(library, p, path[i + 1])))
-        if (hops.every(Boolean)) {
-          impact = priceImpact(amountIn, amountOut, hops, tokenIn.decimals, tokenOut.decimals)
-        }
-      } catch {
-        impact = null
-      }
-      return { path, amountOut, impact }
-    })
-  )
-  const ok = results.filter((r) => r.status === 'fulfilled').map((r) => r.value)
-  if (!ok.length) return null
-  return ok.reduce((best, r) => (r.amountOut.gt(best.amountOut) ? r : best))
+  const key = buildPoolKey(tokenIn, tokenOut)
+  const zeroForOne = isZeroForOne(key, tokenIn)
+
+  const { amountOut } = await quoteExactInputSingle(library, key, zeroForOne, amountIn)
+  if (!amountOut || amountOut.lte(0)) return null
+
+  return {
+    amountOut,
+    key,
+    zeroForOne,
+    path: [toCurrencyAddress(tokenIn), toCurrencyAddress(tokenOut)],
+    impact: await priceImpact(library, key, zeroForOne, tokenIn, tokenOut, amountIn, amountOut),
+  }
 }
 
-/** Pool reserves for a token pair, ordered as (tokenA, tokenB). null if no pool. */
-export async function getPoolReserves(library, tokenAAddr, tokenBAddr) {
-  const r = await hopReserves(library, tokenAAddr, tokenBAddr)
-  return r ? { reserveA: r.reserveIn, reserveB: r.reserveOut } : null
+/** Execution price vs. spot price, as a fraction (0.01 = 1% worse than spot). Null when unknown. */
+async function priceImpact(library, key, zeroForOne, tokenIn, tokenOut, amountIn, amountOut) {
+  try {
+    const { sqrtPriceX96 } = await getPoolState(library, key)
+    // spot (tokenOut per tokenIn): token1/token0 when selling currency0, else its reciprocal.
+    const c0Decimals = zeroForOne ? tokenIn.decimals : tokenOut.decimals
+    const c1Decimals = zeroForOne ? tokenOut.decimals : tokenIn.decimals
+    const token1Per0 = priceFromSqrt(sqrtPriceX96, c0Decimals, c1Decimals)
+    if (!(token1Per0 > 0)) return null
+    const spot = zeroForOne ? token1Per0 : 1 / token1Per0
+
+    const inUnits = Number(utils.formatUnits(amountIn, tokenIn.decimals))
+    const outUnits = Number(utils.formatUnits(amountOut, tokenOut.decimals))
+    if (!(inUnits > 0) || !(spot > 0)) return null
+    const exec = outUnits / inUnits
+    return Math.max(0, 1 - exec / spot)
+  } catch {
+    return null
+  }
 }

@@ -54,16 +54,8 @@ export function bpsToPercent(bps) {
   return (bps / 100).toString()
 }
 
-/** quote(amountA, reserveA, reserveB), same as UniswapV2Library.quote */
-export function quote(amountA, reserveA, reserveB) {
-  const a = BigNumber.from(amountA)
-  const rA = BigNumber.from(reserveA)
-  const rB = BigNumber.from(reserveB)
-  if (a.lte(0) || rA.lte(0) || rB.lte(0)) return null
-  return a.mul(rB).div(rA)
-}
-
-/** Deadline as unix seconds, `minutes` from now. */
+/** Deadline as unix seconds, `minutes` from now. (The V4 router has no deadline; retained for
+ *  display and for any periphery that may add one.) */
 export function deadlineFromNow(minutes, nowMs = Date.now()) {
   const m = Number.isFinite(minutes) && minutes > 0 ? minutes : 20
   return Math.floor(nowMs / 1000) + Math.floor(m * 60)
@@ -76,29 +68,4 @@ export function formatAmount(amount, decimals, maxFrac = 6) {
   const [w, f = ''] = s.split('.')
   const frac = f.slice(0, maxFrac).replace(/0+$/, '')
   return frac ? `${w}.${frac}` : w
-}
-
-/**
- * Price impact of a route vs. spot price, excluding the 0.3% LP fee per hop.
- * hops: [{ reserveIn, reserveOut }] as BigNumbers; amountIn/amountOut as BigNumbers.
- * Returns a fraction (0.01 = 1%) or null if it cannot be computed.
- */
-export function priceImpact(amountIn, amountOut, hops, decimalsIn, decimalsOut) {
-  try {
-    if (!hops.length) return null
-    let spot = Number(utils.formatUnits(amountIn, decimalsIn))
-    for (const h of hops) {
-      const rIn = Number(h.reserveIn)
-      const rOut = Number(h.reserveOut)
-      if (!(rIn > 0) || !(rOut > 0)) return null
-      spot = spot * (rOut / rIn) * 0.997
-    }
-    // the reserves are in raw units of each token, so rescale to token units
-    spot = spot * Math.pow(10, decimalsIn) / Math.pow(10, decimalsOut)
-    const out = Number(utils.formatUnits(amountOut, decimalsOut))
-    if (!(spot > 0)) return null
-    return Math.max(0, 1 - out / spot)
-  } catch {
-    return null
-  }
 }
