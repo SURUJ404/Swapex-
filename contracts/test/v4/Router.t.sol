@@ -200,4 +200,24 @@ contract RouterTest is Test {
             key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -2e18}), address(this)
         );
     }
+
+    function test_modifyLiquidity_fullRangeAddRemove() public {
+        // native pool at 1:1, then a full-range (spacing-aligned) position
+        PoolKey memory key =
+            PoolKey({currency0: ADDRESS_ZERO(), currency1: currency.wrap(address(tokenB)), fee: 3000, tickSpacing: 60, hooks: address(0)});
+        router.initialize(key, Q96);
+        (int24 lo, int24 hi) = (int24(-887220), int24(887220)); // fullRangeTicks(60)
+
+        uint128 liq = 5e17;
+        router.modifyLiquidity{value: 1e18}(
+            key, ModifyLiquidityParams({tickLower: lo, tickUpper: hi, liquidityDelta: int256(uint256(liq))}), address(this)
+        );
+        assertEq(router.getPositionLiquidity(address(this), key, lo, hi), liq, "registry credited");
+
+        (BalanceDelta cd,) = router.modifyLiquidity(
+            key, ModifyLiquidityParams({tickLower: lo, tickUpper: hi, liquidityDelta: -int256(uint256(liq))}), address(this)
+        );
+        assertGt(amount1(cd), 0, "got tokenB back");
+        assertEq(router.getPositionLiquidity(address(this), key, lo, hi), 0, "registry cleared");
+    }
 }
