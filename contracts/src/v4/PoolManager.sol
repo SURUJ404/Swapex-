@@ -74,6 +74,7 @@ contract PoolManager {
     error InvalidProtocolFee();
     error NoLiquidityToAccrue();
     error InsufficientClaim();
+    error InvalidHookDelta();
 
     // ---------------------------------------------------------------- events
     event Initialize(PoolId indexed id, int24 tick);
@@ -203,6 +204,13 @@ contract PoolManager {
             _isTouched[c] = true;
             _touched.push(c);
         }
+    }
+
+    /// @dev burn `amount` of a hook's ERC-6909 claims to fund its donation. The claims are backed
+    ///      1:1 by tokens in `reserves`, so burning them frees real tokens to the pool.
+    function _burnHookClaim(currency c, address hook, uint256 amount) private {
+        if (claims[c][hook] < amount) revert InsufficientClaim();
+        claims[c][hook] -= amount;
     }
 
     // ---------------------------------------------------------------- setup
@@ -447,6 +455,24 @@ contract PoolManager {
         callerDelta = toBalanceDelta(-amount0Raw, -amount1Raw);
         _accountDelta(key.currency0, -amount0Raw);
         _accountDelta(key.currency1, -amount1Raw);
+
+        // opt-in hook donation (D21): a hook flagged BEFORE_SWAP_DELTA may return a non-positive
+        // delta it donates to the pool, funded by burning its ERC-6909 claims. The donation is
+        // credited to the caller, who therefore settles less. A positive component would mint free
+        // claims and is rejected. The hook's claims are already backed by tokens in `reserves`, so
+        // burning them frees real tokens to the pool and keeps net-zero + solvency intact.
+        if (h != address(0) && Hooks.hasPermission(h, Hooks.BEFORE_SWAP_DELTA_FLAG)) {
+            BalanceDelta hd = IHooks(h).beforeSwapDelta(key, params, hookData);
+            int256 hd0 = hd.amount0();
+            int256 hd1 = hd.amount1();
+            if (hd0 > 0 || hd1 > 0) revert InvalidHookDelta();
+            if (hd0 < 0) _burnHookClaim(key.currency0, h, uint256(-hd0));
+            if (hd1 < 0) _burnHookClaim(key.currency1, h, uint256(-hd1));
+            // credit the caller: they owe less because the hook donated (negate the hook's delta)
+            callerDelta = toBalanceDelta(callerDelta.amount0() - hd0, callerDelta.amount1() - hd1);
+            _accountDelta(key.currency0, -hd0);
+            _accountDelta(key.currency1, -hd1);
+        }
 
         if (h != address(0) && Hooks.hasPermission(h, Hooks.AFTER_SWAP_FLAG)) {
             IHooks(h).afterSwap(key, params, callerDelta, hookData);

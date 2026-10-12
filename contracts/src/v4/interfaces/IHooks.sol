@@ -23,6 +23,14 @@ interface IHooks {
     function beforeSwap(PoolKey calldata key, SwapParams calldata params, bytes calldata hookData) external;
     function afterSwap(PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata hookData) external;
 
+    /// @notice a hook flagged BEFORE_SWAP_DELTA returns a donation (a non-positive BalanceDelta, in
+    ///         caller-owes convention for the hook) that the manager credits to the swap caller. It
+    ///         is funded by burning the hook's ERC-6909 claims; a positive component is rejected.
+    function beforeSwapDelta(PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
+        external
+        view
+        returns (BalanceDelta);
+
     /// @notice a dynamic-fee hook returns the lp fee (in hundredths of a bip) to charge for a swap.
     function getSwapFee(PoolKey calldata key) external view returns (uint24);
 }

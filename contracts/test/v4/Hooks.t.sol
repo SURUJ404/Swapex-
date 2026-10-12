@@ -107,7 +107,7 @@ contract HooksTest is Test {
     function _mineHook(address impl, uint256 flags) internal returns (address hook) {
         bytes memory code = impl.code;
         bytes32 salt = keccak256(abi.encodePacked(code, flags));
-        hook = address(uint160((uint256(salt) & ~uint256(0xFFF)) | flags));
+        hook = address(uint160((uint256(salt) & ~uint256(0x1FFF)) | flags));
         vm.etch(hook, code);
     }
 
