@@ -73,6 +73,7 @@ contract PoolManager {
     error NotOwner();
     error InvalidProtocolFee();
     error NoLiquidityToAccrue();
+    error InsufficientClaim();
 
     // ---------------------------------------------------------------- events
     event Initialize(PoolId indexed id, int24 tick);
@@ -80,6 +81,7 @@ contract PoolManager {
     event ModifyLiquidity(PoolId indexed id, address indexed owner, int24 tickLower, int24 tickUpper, int256 liquidityDelta, int256 amount0, int256 amount1);
     event SetProtocolFee(PoolId indexed id, uint24 protocolFee);
     event CollectProtocol(PoolId indexed id, address indexed recipient, uint128 amount0, uint128 amount1);
+    event ClaimMove(currency indexed id, address indexed from, address indexed to, uint256 amount);
 
     // ---------------------------------------------------------------- pool state
     /// @dev `protocolFee` is the share (in 1e6, so 1e6 = 100%) of the lp fee that the protocol
@@ -650,6 +652,60 @@ contract PoolManager {
             _setDelta(c, delta - int256(amount));
         }
         c.transfer(to, amount);
+    }
+
+    // ---------------------------------------------------------------- claims (ERC-6909)
+    /// @notice ERC-6909 claim ledger: `claims[currency][account]` is `account`'s ownership of the
+    ///         manager's held `currency`. Every claim is backed 1:1 by tokens the manager already
+    ///         holds (tracked in `reserves`), so it can always be redeemed via `burn`. Solvency
+    ///         invariant `reserves[c] >= claims[c] + (positive deltas for c)` is maintained:
+    ///         `mint`/`burn` move real tokens and reserves together; `settleViaClaim` turns a
+    ///         negative delta into a claim burn and `takeViaClaim` turns a positive delta into a
+    ///         claim mint — neither moves tokens, so reserves is unchanged and still covers the
+    ///         reclassified obligation.
+    mapping(currency => mapping(address => uint256)) public claims;
+
+    /// @notice deposit `amount` of `c` (pulled from the caller) and mint that many claims to `to`.
+    ///         Standalone (not part of an unlock): it only moves the caller's tokens for claims.
+    function mint(currency c, address to, uint256 amount) external {
+        c.transferFrom(msg.sender, address(this), amount);
+        reserves[c] += amount;
+        claims[c][to] += amount;
+        emit ClaimMove(c, address(0), to, amount);
+    }
+
+    /// @notice redeem `amount` of the caller's claims for real tokens sent to `to`.
+    function burn(currency c, address to, uint256 amount) external {
+        if (claims[c][msg.sender] < amount) revert InsufficientClaim();
+        claims[c][msg.sender] -= amount;
+        reserves[c] -= amount;
+        c.transfer(to, amount);
+        emit ClaimMove(c, msg.sender, address(0), amount);
+    }
+
+    /// @notice within an unlock: cover the caller's negative delta for `c` by burning their claims
+    ///         (the tokens already sit in the manager backing those claims). No token transfer.
+    function settleViaClaim(currency c) external onlyUnlocked returns (uint256 amount) {
+        int256 delta = _getDelta(c);
+        if (delta >= 0) revert DeltaNotNegative();
+        amount = uint256(-delta);
+        if (claims[c][msg.sender] < amount) revert InsufficientClaim();
+        claims[c][msg.sender] -= amount;
+        _setDelta(c, 0);
+        emit ClaimMove(c, msg.sender, address(0), amount);
+    }
+
+    /// @notice within an unlock: cover `amount` of the caller's positive delta for `c` by minting
+    ///         claims to `to` instead of transferring tokens out. No token transfer.
+    function takeViaClaim(currency c, address to, uint256 amount) external onlyUnlocked {
+        int256 delta = _getDelta(c);
+        if (delta < int256(amount)) revert InsufficientTake();
+        claims[c][to] += amount;
+        unchecked {
+            // delta >= amount > 0 was checked above, so the subtraction cannot go negative
+            _setDelta(c, delta - int256(amount));
+        }
+        emit ClaimMove(c, address(0), to, amount);
     }
 
     // ---------------------------------------------------------------- views
