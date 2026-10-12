@@ -174,3 +174,47 @@ momentarily hold the tokens. This is the standard periphery pattern (Uniswap V2/
 do this) and means users approve one trusted Router rather than the core manager. Multi-hop is
 chained by reading each hop's intermediate delta after it executes, so intermediate currencies net
 to zero and only the first input / last output move.
+
+## D20 — `sync` is intentionally omitted (superseded by D16)
+**Decision:** The V4-style `sync(currency)` balance-snapshot is **not** implemented. Native settle
+uses the payable-`msg.value` path from D16, which makes the balance-diff mechanism `sync` exists to
+serve unnecessary.
+**Rationale:** `sync` only adds value as the companion to a balance-diff `settle`. Since D16 chose
+`msg.value == amount` (a single, simpler settlement path for both currency kinds), a balance snapshot
+would be dead state. The design surface listed `sync`, but D16 is a later, deliberate choice that
+supersedes it; adding an unused `sync` would be dead code.
+
+## D21 — Hook return-delta is donation-only (`beforeSwapDelta`)
+**Decision:** A hook flagged `BEFORE_SWAP_DELTA` (bit 12) may return a **non-positive** `BalanceDelta`
+from `beforeSwapDelta`. The manager burns the hook's ERC-6909 claims to fund it and credits the
+donation to the swap caller (who settles less). A positive component reverts `InvalidHookDelta`; an
+under-funded donation reverts `InsufficientClaim`.
+**Rationale:** The transient delta ledger is keyed by **currency only**, so a hook cannot settle an
+independent delta. Folding a hook delta into the caller's settlement is only sound when the hook's
+contribution is pre-funded — here via claims (backed 1:1 by `reserves`). Restricting to donations
+(negative deltas) means a hook can only put value in, never take it out: a positive delta would mint
+unbacked claims and is rejected. Net-zero and solvency are preserved because the hook's claims are
+already backed by real tokens; burning them frees those tokens to the pool and the caller's
+obligation shrinks by the same amount.
+
+## D22 — ERC-6909 claims are backed 1:1 by `reserves`; claim settle/take reclassify deltas
+**Decision:** `claims[c][a]` is `a`'s ownership of tokens the manager already holds (`reserves`).
+`mint` (deposit) pulls real tokens (`reserves +=`, `claims +=`); `burn` (redeem) sends them out
+(`reserves -=`, `claims -=`). `settleViaClaim` burns the caller's claims to clear a negative delta
+and `takeViaClaim` mints claims to clear a positive delta — neither moves tokens, so `reserves` is
+unchanged and still covers the reclassified obligation.
+**Rationale:** Tying every claim to real tokens in `reserves` keeps the solvency invariant
+`reserves[c] >= claims[c] + positiveDeltas[c]` inductively maintainable: `mint`/`burn` move both
+sides together; the claim variants shift an obligation between the delta ledger and the claims
+ledger by equal amounts. This lets the manager support gas-efficient claim-based settlement without
+ever issuing an unbacked IOU.
+
+## D23 — Protocol fee is a carve-out of the lp fee, not an extra charge on the trader
+**Decision:** `protocolFee` (in 1e6) is the share of the lp fee routed to the protocol per swap. The
+trader pays the same total (the fee is still `input * lpFee / 1e6`); only the split between LP
+accrual and protocol accrual changes. The protocol cut accrues per-currency (input token) to
+`protocolFees0/1` and is owner-withdrawable via `collectProtocol`.
+**Rationale:** Making the protocol fee a carve-out (rather than a surcharge) means enabling it never
+changes execution price for traders, so it can be turned on for live pools without surprising users.
+It is read once per swap and applied in the existing fee-accrual block, so the swap loop and the
+`FG` accounting are untouched apart from subtracting the protocol portion before the LP update.

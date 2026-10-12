@@ -80,6 +80,24 @@ native-ETH currency helpers). No new high/medium findings that represent a real 
 | `cyclomatic-complexity` | `PoolManager._swap` (27) | **By design**, same rationale as the V3 `swap` above: the tick-crossing loop is inherently branchy and mirrors the reference model 1:1. |
 | `reentrancy-benign` / `reentrancy-events` / `unused-return` / `missing-zero-check` / `assembly` / `costly-loop` / `dead-code` / `too-many-digits` | various | Informational / heuristics already triaged in Phase 1/2; the V4 additions (`tstore`/`tload` assembly, hook event ordering) follow the same accepted patterns. |
 
+## Phase 4 — protocol fee, donate, claims, hook delta (Slither)
+
+Re-ran Slither 0.11.6 over `src/` after the Phase 4 additions. The Phase 2/3 findings are unchanged
+(see the tables above). One new code-quality hit was **fixed**; no new real defects. Triage of the
+Phase 4-relevant detectors:
+
+| Detector | Location | Why it is safe / action |
+|---|---|---|
+| `shadowing-local` | `PoolManager._updatePosition` local `owner` vs. new state `owner` | **Fixed.** Adding the protocol `owner` state in P4.1 shadowed the pre-existing `_updatePosition` parameter `owner` (the position owner — a different concept). Renamed the parameter to `positionOwner`. Benign either way, but shadowing is a known footgun, so it was removed. |
+| `arbitrary-send-erc20` | `CurrencyLibrary.transferFrom` | Unchanged — **false positive** (see Phase 3: `from` is always trusted). Now also used by `mint` (pulls `msg.sender`). |
+| `reentrancy-no-eth` / `reentrancy-benign` / `reentrancy-events` | `donate` / `mint` / `burn` / claim settlement | **By design — untrusted hooks / checks-effects-interactions.** `donate` is `onlyUnlocked` and net-zero-swept; `mint`/`burn` update `claims`/`reserves` before the token transfer (effects-before-interactions), so a re-entering token sees updated state. Hooks cannot extract unsettled value (net-zero sweep). |
+| `uninitialized-local` | `_updatePosition` `flippedLower`/`flippedUpper` | Same known false positive (assigned under `if (ld != 0)`, read under the same guard). |
+| `calls-loop` / `costly-loop` | unchanged | **By design**, bounded (see Phase 3). |
+| `cyclomatic-complexity` | `PoolManager._swap` (34) | **By design**, same as Phase 3; the P4.4 donation fold is gated by a flag and adds one branch. |
+| `unused-return` | `OracleHook.afterSwap` ignores `getSlot0`'s tick | **By design / informational.** The reference oracle hook only needs `sqrtPriceX96`; ignoring the tick is intentional. |
+| `missing-zero-check` | `Router.exactInputSingle`/`exactInput`/`modifyLiquidity` `recipient` | **Accepted (Low, caller responsibility).** `recipient` is caller-supplied; sending to `address(0)` is a caller error that burns their own output, not an exploit. The manager's `take`/`burn` are only reachable with caller-chosen recipients. |
+| `assembly` / `low-level-calls` / `dead-code` / `too-many-digits` / `immutable-states` | various | Informational / by-design (transient-storage `tstore`/`tload`, native ETH `call{value:}`), unchanged from Phase 2/3. |
+
 
 **Status: not run in this environment (Windows).** Aderyn ships no Windows prebuilt binary
 (the GitHub releases contain only `*-apple-darwin` artifacts), and building from source fails:

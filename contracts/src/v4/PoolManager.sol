@@ -597,13 +597,13 @@ contract PoolManager {
 
     function _updatePosition(
         Pool storage pool,
-        address owner,
+        address positionOwner,
         PoolKey memory key,
         ModifyLiquidityParams memory params,
         int128 ld,
         int24 tick
     ) private returns (int256 fees0, int256 fees1) {
-        Position.Info storage position = pool.positions.get(owner, params.tickLower, params.tickUpper);
+        Position.Info storage position = pool.positions.get(positionOwner, params.tickLower, params.tickUpper);
         uint256 fg0 = pool.feeGrowthGlobal0X128;
         uint256 fg1 = pool.feeGrowthGlobal1X128;
         uint128 maxLiqPerTick = Tick.tickSpacingToMaxLiquidityPerTick(key.tickSpacing);
