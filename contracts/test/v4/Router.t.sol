@@ -65,7 +65,8 @@ contract RouterTest is Test {
                 amountSpecified: 1e18,
                 sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1
             }),
-            address(this)
+            address(this),
+            0
         );
 
         assertLt(tokenA.balanceOf(address(this)), aBefore, "spent input tokenA");
@@ -141,9 +142,30 @@ contract RouterTest is Test {
         router.exactInputSingle{value: 1e18}(
             key,
             SwapParams({zeroForOne: true, amountSpecified: 1e18, sqrtPriceLimitX96: TickMath.MIN_SQRT_RATIO + 1}),
-            address(this)
+            address(this),
+            0
         );
         assertGt(tokenB.balanceOf(address(this)), bBefore, "received tokenB for native input");
+    }
+
+    function test_exactInputSingle_revertsBelowMinOut() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+        _seed(key);
+
+        bool zeroForOne = currency.unwrap(key.currency0) == address(tokenA);
+        // an impossible floor: demand far more output than the pool can give for 1e18 input.
+        vm.expectRevert();
+        router.exactInputSingle(
+            key,
+            SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: 1e18,
+                sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1
+            }),
+            address(this),
+            type(uint128).max
+        );
     }
 
     function token0Balance(PoolKey memory key) internal view returns (uint256) {

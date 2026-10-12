@@ -218,3 +218,26 @@ accrual and protocol accrual changes. The protocol cut accrues per-currency (inp
 changes execution price for traders, so it can be turned on for live pools without surprising users.
 It is read once per swap and applied in the existing fee-accrual block, so the swap loop and the
 `FG` accounting are untouched apart from subtracting the protocol portion before the LP update.
+
+## D24 — Off-chain quotes come from a revert-based `Quoter`, not a JS math port
+**Decision:** A new periphery `Quoter.quoteExactInputSingle(key, sp)` simulates an exact-input swap
+inside a throwaway `unlock` session whose callback reverts with the encoded `(amount0, amount1)`.
+The outer call catches the revert, decodes the `Quoted(int256,int256)` payload, and returns it.
+**Rationale:** The frontend needs an accurate output quote before a user swaps. Porting the
+concentrated-liquidity swap loop (tick bitmap traversal + `SwapMath` + 512-bit `FullMath`) to JS is
+hundreds of lines of high-risk fixed-point code needing its own golden-vector suite. Because
+`PoolManager.unlock` has no try/catch, a callback revert unwinds the entire session — including the
+transient flash-accounting deltas (EIP-1153) — so the Quoter commits no state, needs no balance or
+allowance, and is safe to `eth_call`. `QuoterTest.test_quoteMatchesActualSwapOutput` asserts the
+quote equals the real swap's output token balance delta bit-for-bit.
+
+## D25 — Slippage protection is an `amountOutMin` floor on the Router that reverts, not a bare price limit
+**Decision:** `Router.exactInputSingle` now takes `minAmountOut` and reverts with
+`InsufficientOutputAmount` inside the callback if the swap's positive (output) delta is below it.
+`minAmountOut == 0` disables the check; `exactInput` (multi-hop) is unchanged.
+**Rationale:** The natural alternative — tightening `sqrtPriceLimitX96` for slippage — only bounds how
+far the price may move; when a swap hits the limit early it returns a *partial fill* (fewer tokens
+out, only part of the input spent) rather than reverting, which is poor UX and can strand dust. A
+minimum-output floor gives "all-or-nothing": either the trade clears the user's price or the whole
+transaction reverts. It is purely additive (a zero floor reproduces prior behavior exactly), so
+existing call sites only needed the extra argument.

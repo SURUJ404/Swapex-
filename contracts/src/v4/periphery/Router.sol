@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {PoolManager, IUnlockCallback, SwapParams, ModifyLiquidityParams} from "../PoolManager.sol";
 import {currency, isNative} from "../types/Currency.sol";
-import {BalanceDelta} from "../types/BalanceDelta.sol";
+import {BalanceDelta, amount0, amount1} from "../types/BalanceDelta.sol";
 import {PoolKey} from "../types/PoolKey.sol";
 import {TickMath} from "../../libraries/TickMath.sol";
 
@@ -30,6 +30,7 @@ contract Router is IUnlockCallback {
     BalanceDelta private _swapDelta;
     BalanceDelta private _liqCallerDelta;
     BalanceDelta private _liqFees;
+    uint256 private _minOut;
 
     uint8 private constant OP_SINGLE = 0;
     uint8 private constant OP_MULTI = 1;
@@ -37,6 +38,7 @@ contract Router is IUnlockCallback {
 
     error PathTooShort();
     error PathCurrenciesDisjoint();
+    error InsufficientOutputAmount(int256 amountOut, uint256 minAmountOut);
 
     constructor(PoolManager _pm) {
         pm = _pm;
@@ -48,7 +50,9 @@ contract Router is IUnlockCallback {
     }
 
     /// @notice exact-input swap on a single pool. `sp.amountSpecified` must be > 0 (exact in).
-    function exactInputSingle(PoolKey memory key, SwapParams memory sp, address recipient)
+    ///         `minAmountOut` is a slippage floor on the output (in the output currency's base
+    ///         units); the whole swap reverts if the realized output is below it. Zero disables.
+    function exactInputSingle(PoolKey memory key, SwapParams memory sp, address recipient, uint256 minAmountOut)
         external
         payable
         returns (BalanceDelta)
@@ -57,6 +61,7 @@ contract Router is IUnlockCallback {
         _recipient = recipient;
         _singleKey = key;
         _singleParams = sp;
+        _minOut = minAmountOut;
         _op = OP_SINGLE;
         delete _pathKeys;
         pm.unlock("");
@@ -105,6 +110,7 @@ contract Router is IUnlockCallback {
         require(msg.sender == address(pm), "only manager");
         if (_op == OP_SINGLE) {
             _swapDelta = pm.swap(_singleKey, _singleParams);
+            _enforceMinOut(_singleParams.zeroForOne, _swapDelta, _minOut);
             _settleOrTake(_singleKey.currency0);
             _settleOrTake(_singleKey.currency1);
         } else if (_op == OP_MULTI) {
@@ -185,5 +191,15 @@ contract Router is IUnlockCallback {
         } else if (delta > 0) {
             pm.take(c, _recipient, uint256(delta));
         }
+    }
+
+    /// @dev revert if the swap's output (the positive delta in the output currency) is below
+    ///      `minOut`. A zero `minOut` disables the check. Under the caller-owes convention the
+    ///      output currency is the one with a positive delta: selling currency0 (zeroForOne)
+    ///      pays out currency1, otherwise currency0.
+    function _enforceMinOut(bool zeroForOne, BalanceDelta d, uint256 minOut) private pure {
+        if (minOut == 0) return;
+        int256 out = zeroForOne ? amount1(d) : amount0(d);
+        if (out < 0 || uint256(out) < minOut) revert InsufficientOutputAmount(out, minOut);
     }
 }
