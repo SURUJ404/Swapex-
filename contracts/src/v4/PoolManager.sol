@@ -70,16 +70,24 @@ contract PoolManager {
     error NativeSettleAmountMismatch();
     error UnexpectedEth();
     error LiquidityDeltaOverflow();
+    error NotOwner();
+    error InvalidProtocolFee();
 
     // ---------------------------------------------------------------- events
     event Initialize(PoolId indexed id, int24 tick);
     event Swap(PoolId indexed id, int256 amount0, int256 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick);
     event ModifyLiquidity(PoolId indexed id, address indexed owner, int24 tickLower, int24 tickUpper, int256 liquidityDelta, int256 amount0, int256 amount1);
+    event SetProtocolFee(PoolId indexed id, uint24 protocolFee);
+    event CollectProtocol(PoolId indexed id, address indexed recipient, uint128 amount0, uint128 amount1);
 
     // ---------------------------------------------------------------- pool state
+    /// @dev `protocolFee` is the share (in 1e6, so 1e6 = 100%) of the lp fee that the protocol
+    ///      carves out on each swap. It does not change what the trader pays; it reduces what the
+    ///      lp accrues. It is set by the owner and defaults to 0.
     struct Slot0 {
         uint160 sqrtPriceX96;
         int24 tick;
+        uint24 protocolFee;
     }
 
     /// @dev Nested mappings make Pool non-copyable; it lives only in storage keyed by PoolId.
@@ -88,6 +96,9 @@ contract PoolManager {
         uint128 liquidity;
         uint256 feeGrowthGlobal0X128;
         uint256 feeGrowthGlobal1X128;
+        /// @notice accrued (unsettled-to-owner) protocol fees per currency.
+        uint128 protocolFees0;
+        uint128 protocolFees1;
         mapping(int24 => Tick.Info) ticks;
         mapping(int16 => uint256) tickBitmap;
         mapping(bytes32 => Position.Info) positions;
@@ -96,6 +107,21 @@ contract PoolManager {
     mapping(PoolId => Pool) public pools;
     /// @notice tokens actually held by the manager per currency (mirrors its ERC-20 balance).
     mapping(currency => uint256) public reserves;
+
+    /// @notice the only account that may set protocol fees and collect them.
+    address public owner;
+
+    /// @dev protocolFee is expressed in 1e6 units; 1e6 means the protocol takes the entire lp fee.
+    uint24 public constant PROTOCOL_FEE_DENOMINATOR = 1_000_000;
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
 
     // ---------------------------------------------------------------- flash accounting
     /// @dev solc 0.8.26 supports only transient *value* types, not mappings, so the per-currency
@@ -204,11 +230,54 @@ contract PoolManager {
             IHooks(h).beforeInitialize(key, sqrtPriceX96, hookData);
         }
         tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
-        pool.slot0 = Slot0({sqrtPriceX96: sqrtPriceX96, tick: tick});
+        pool.slot0 = Slot0({sqrtPriceX96: sqrtPriceX96, tick: tick, protocolFee: 0});
         if (h != address(0) && Hooks.hasPermission(h, Hooks.AFTER_INITIALIZE_FLAG)) {
             IHooks(h).afterInitialize(key, sqrtPriceX96, tick, hookData);
         }
         emit Initialize(id, tick);
+    }
+
+    // ---------------------------------------------------------------- protocol fee
+    /// @notice set the protocol's share (in 1e6) of the lp fee for a pool. Owner-only.
+    function setProtocolFee(PoolKey memory key, uint24 newProtocolFee) external onlyOwner {
+        if (newProtocolFee > PROTOCOL_FEE_DENOMINATOR) revert InvalidProtocolFee();
+        PoolId id = key.toPoolId();
+        Pool storage pool = pools[id];
+        if (pool.slot0.sqrtPriceX96 == 0) revert PoolNotInitialized();
+        pool.slot0.protocolFee = newProtocolFee;
+        emit SetProtocolFee(id, newProtocolFee);
+    }
+
+    /// @notice withdraw all accrued protocol fees for a pool to `recipient`. Owner-only. Not part
+    ///         of an unlock session: protocol fees are already-settled tokens the manager holds.
+    function collectProtocol(PoolKey memory key, address recipient)
+        external
+        onlyOwner
+        returns (uint128 amount0, uint128 amount1)
+    {
+        PoolId id = key.toPoolId();
+        Pool storage pool = pools[id];
+        amount0 = pool.protocolFees0;
+        amount1 = pool.protocolFees1;
+        if (amount0 == 0 && amount1 == 0) return (0, 0);
+        pool.protocolFees0 = 0;
+        pool.protocolFees1 = 0;
+        reserves[key.currency0] -= amount0;
+        reserves[key.currency1] -= amount1;
+        if (amount0 > 0) key.currency0.transfer(recipient, amount0);
+        if (amount1 > 0) key.currency1.transfer(recipient, amount1);
+        emit CollectProtocol(id, recipient, amount0, amount1);
+    }
+
+    /// @notice accrued (not-yet-collected) protocol fees for a pool.
+    function getProtocolFees(PoolKey memory key) external view returns (uint128 amount0, uint128 amount1) {
+        Pool storage pool = pools[key.toPoolId()];
+        return (pool.protocolFees0, pool.protocolFees1);
+    }
+
+    /// @notice the current protocol fee share (in 1e6) for a pool.
+    function getProtocolFee(PoolKey memory key) external view returns (uint24) {
+        return pools[key.toPoolId()].slot0.protocolFee;
     }
 
     // ---------------------------------------------------------------- swap
@@ -219,6 +288,7 @@ contract PoolManager {
         int24 tick;
         uint256 feeGrowthGlobalX128; // growth of the input token
         uint128 liquidity;
+        uint256 protocolFees; // protocol's cut of the input-token fees, accrued this swap
     }
 
     struct StepComputations {
@@ -275,13 +345,15 @@ contract PoolManager {
         ) revert InvalidPriceLimit();
 
         bool exactInput = params.amountSpecified > 0;
+        uint24 protocolFee = slot0Start.protocolFee;
         SwapState memory state = SwapState({
             amountSpecifiedRemaining: params.amountSpecified,
             amountCalculated: 0,
             sqrtPriceX96: slot0Start.sqrtPriceX96,
             tick: slot0Start.tick,
             feeGrowthGlobalX128: zeroForOne ? pool.feeGrowthGlobal0X128 : pool.feeGrowthGlobal1X128,
-            liquidity: pool.liquidity
+            liquidity: pool.liquidity,
+            protocolFees: 0
         });
 
         while (state.amountSpecifiedRemaining != 0 && state.sqrtPriceX96 != params.sqrtPriceLimitX96) {
@@ -313,6 +385,16 @@ contract PoolManager {
             } else {
                 state.amountSpecifiedRemaining += step.amountOut.toInt256();
                 state.amountCalculated += (step.amountIn + step.feeAmount).toInt256();
+            }
+
+            // carve the protocol's cut out of the fee before accruing the lp portion. The protocol
+            // share is a fraction (protocolFee/1e6) of the fee and does not change the trader's
+            // cost (amountSpecified above already used the full feeAmount); it only reduces what
+            // the lp accrues. The protocol portion accrues in the input-token units.
+            if (protocolFee > 0) {
+                uint256 protocolPortion = FullMath.mulDiv(step.feeAmount, protocolFee, PROTOCOL_FEE_DENOMINATOR);
+                step.feeAmount -= protocolPortion;
+                state.protocolFees += protocolPortion;
             }
 
             // fees only accrue to in-range liquidity; wrap-around is intended
@@ -347,6 +429,11 @@ contract PoolManager {
         if (pool.liquidity != state.liquidity) pool.liquidity = state.liquidity;
         if (zeroForOne) pool.feeGrowthGlobal0X128 = state.feeGrowthGlobalX128;
         else pool.feeGrowthGlobal1X128 = state.feeGrowthGlobalX128;
+        if (state.protocolFees > 0) {
+            // the protocol's cut is denominated in the input token (token0 when zeroForOne)
+            if (zeroForOne) pool.protocolFees0 += state.protocolFees.toUint128();
+            else pool.protocolFees1 += state.protocolFees.toUint128();
+        }
 
         // V3-style amounts: positive = caller owes the pool, negative = pool owes the caller
         (int256 amount0Raw, int256 amount1Raw) = zeroForOne == exactInput
