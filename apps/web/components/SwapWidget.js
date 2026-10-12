@@ -10,10 +10,10 @@ import useAllowance from '../hooks/useAllowance'
 import useApprove from '../hooks/useApprove'
 import useTransact from '../hooks/useTransact'
 import { findBestRoute } from '../lib/route'
+import { sqrtPriceLimitX96 } from '../lib/pool'
 import {
   parseAmount,
   minAfterSlippage,
-  deadlineFromNow,
   formatAmount,
 } from '../lib/amounts'
 import { DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES, HIGH_PRICE_IMPACT } from '../lib/config'
@@ -90,21 +90,24 @@ export default function SwapWidget() {
   const swap = async () => {
     if (!account || !library || !amountIn || !route) return
     const router = new Contract(ROUTER_ADDRESS, ROUTER_ABI, library.getSigner())
-    const deadline = deadlineFromNow(deadlineMin)
-    const { path } = route
-    const min = minReceived
+    const { key, zeroForOne } = route
+    const min = minReceived || 0
+    const nativeIn = inputToken.address === 'NATIVE'
     await run({
       label: `Swap ${inputToken.symbol} → ${outputToken.symbol}`,
       successMessage: `Swapped ${formatAmount(amountIn, inputToken.decimals)} ${inputToken.symbol} for ${formatAmount(amountOut, outputToken.decimals)} ${outputToken.symbol}`,
-      send: () => {
-        if (inputToken.address === 'NATIVE') {
-          return router.swapExactETHForTokens(min, path, account, deadline, { value: amountIn })
-        }
-        if (outputToken.address === 'NATIVE') {
-          return router.swapExactTokensForETH(amountIn, min, path, account, deadline)
-        }
-        return router.swapExactTokensForTokens(amountIn, min, path, account, deadline)
-      },
+      send: () =>
+        router.exactInputSingle(
+          key,
+          {
+            zeroForOne,
+            amountSpecified: amountIn,
+            sqrtPriceLimitX96: sqrtPriceLimitX96(zeroForOne),
+          },
+          account,
+          min,
+          nativeIn ? { value: amountIn } : {}
+        ),
       onSuccess: () => {
         setInputAmount('')
         setRoute(null)
@@ -232,9 +235,7 @@ export default function SwapWidget() {
           <div className="flex justify-between">
             <span>Route</span>
             <span>
-              {route.path
-                .map((a) => TOKEN_LIST.find((t) => t.address.toLowerCase() === a.toLowerCase())?.symbol || `${a.slice(0, 6)}…`)
-                .join(' → ')}
+              {inputToken.symbol} → {outputToken.symbol}
             </span>
           </div>
         </div>

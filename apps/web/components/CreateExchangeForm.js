@@ -1,106 +1,144 @@
-import React, { useState } from 'react'
-import { Contract, utils } from 'ethers'
+import React, { useState, useMemo } from 'react'
+import { Contract } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { FACTORY_ADDRESS, FACTORY_ABI, ERC20_ABI } from '../constants'
+import { TOKEN_LIST, ROUTER_ADDRESS, ROUTER_ABI } from '../constants'
 import NetworkGuard from './NetworkGuard'
+import TokenSelectModal from './TokenSelectModal'
 import useTransact from '../hooks/useTransact'
-import { useToast } from './Toast'
-import { WETH_ADDRESS } from '../lib/config'
+import { buildPoolKey, toCurrencyAddress, getPoolState } from '../lib/pool'
+import { priceToSqrtPriceX96 } from '../lib/price'
+import { NATIVE_ADDRESS } from '../constants'
 
-const ZERO = '0x0000000000000000000000000000000000000000'
+function TokenButton({ token, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border)] text-sm font-medium text-[var(--text-primary)]"
+    >
+      <img src={token.logo} alt={token.symbol} className="w-5 h-5 rounded-full" />
+      {token.symbol}
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+      </svg>
+    </button>
+  )
+}
+
+function tokenFor(address) {
+  if (address.toLowerCase() === '0x0000000000000000000000000000000000000000') {
+    return TOKEN_LIST.find((t) => t.address === NATIVE_ADDRESS) || { symbol: 'ETH', decimals: 18 }
+  }
+  return TOKEN_LIST.find((t) => toCurrencyAddress(t).toLowerCase() === address.toLowerCase()) || null
+}
 
 export default function CreateExchangeForm() {
   const { account, library } = useWeb3()
-  const { addToast } = useToast()
-  const { run, pending: loading } = useTransact()
-  const [tokenAddress, setTokenAddress] = useState('')
-  const [checking, setChecking] = useState(false)
+  const { run, pending: creating } = useTransact()
 
-  const valid = utils.isAddress(tokenAddress)
+  const [tokenA, setTokenA] = useState(TOKEN_LIST[1])
+  const [tokenB, setTokenB] = useState(TOKEN_LIST[0]) // default: pair with native ETH
+  const [price, setPrice] = useState('1')
+  const [busy, setBusy] = useState(false)
+  const [showA, setShowA] = useState(false)
+  const [showB, setShowB] = useState(false)
 
-  const createExchange = async () => {
-    if (!account || !library || !valid) return
-    if (tokenAddress.toLowerCase() === WETH_ADDRESS.toLowerCase()) {
-      addToast('Pools are created against WETH, so pick a different token', 'error')
-      return
-    }
-    setChecking(true)
+  const key = useMemo(() => buildPoolKey(tokenA, tokenB), [tokenA, tokenB])
+  const sameToken = tokenA.address === tokenB.address
+  const currency0 = tokenFor(key.currency0)
+  const currency1 = tokenFor(key.currency1)
+
+  const validPrice = /^\d*\.?\d+$|^\d+\.$/.test(price.trim()) && parseFloat(price) > 0
+
+  const checkAndCreate = async () => {
+    if (!account || !library || sameToken || !validPrice) return
+    setBusy(true)
     try {
-      // 1. must be an ERC-20 (has code and answers symbol/decimals)
-      const code = await library.getCode(tokenAddress)
-      if (!code || code === '0x') {
-        addToast('No contract at that address on this network', 'error')
-        return
+      for (const addr of [key.currency0, key.currency1]) {
+        if (addr.toLowerCase() !== '0x0000000000000000000000000000000000000000') {
+          const code = await library.getCode(addr)
+          if (!code || code === '0x') throw new Error('no-code')
+        }
       }
-      try {
-        const t = new Contract(tokenAddress, ERC20_ABI, library)
-        await Promise.all([t.decimals(), t.totalSupply()])
-      } catch {
-        addToast('That contract does not look like an ERC-20 token', 'error')
-        return
-      }
-      // 2. must not already have a pool
-      const factory = new Contract(FACTORY_ADDRESS, FACTORY_ABI, library)
-      if ((await factory.getPair(tokenAddress, WETH_ADDRESS)) !== ZERO) {
-        addToast('A pool for this token already exists. Add liquidity instead.', 'error')
-        return
-      }
-    } catch {
-      addToast('Could not verify the token. Try again.', 'error')
+      const state = await getPoolState(library, key)
+      if (!state.sqrtPriceX96.isZero()) throw new Error('exists')
+    } catch (e) {
+      alert(e.message === 'exists' ? 'This pool already exists. Add liquidity instead.' : e.message === 'no-code' ? 'That address has no contract on this network.' : 'Could not verify the pair.')
       return
     } finally {
-      setChecking(false)
+      setBusy(false)
     }
 
     const signer = library.getSigner()
+    const sqrtPriceX96 = priceToSqrtPriceX96(price, currency0.decimals, currency1.decimals)
     await run({
-      label: 'Create Exchange',
-      successMessage: 'Exchange created. Add liquidity to start trading.',
-      send: () => new Contract(FACTORY_ADDRESS, FACTORY_ABI, signer).createPair(tokenAddress, WETH_ADDRESS),
-      onSuccess: () => setTokenAddress(''),
+      label: 'Create Pool',
+      successMessage: `Pool created. Add liquidity to start trading.`,
+      send: () => new Contract(ROUTER_ADDRESS, ROUTER_ABI, signer).initialize(key, sqrtPriceX96),
+      onSuccess: () => {},
     })
   }
 
-  const busy = loading || checking
+  const busyAll = busy || creating
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-6 max-w-md mx-auto">
-      <h2 className="text-xl font-semibold font-display text-[var(--text-primary)] mb-6">Create Exchange</h2>
+      <h2 className="text-xl font-semibold font-display text-[var(--text-primary)] mb-6">Create Pool</h2>
 
       <p className="text-sm text-[var(--text-secondary)] mb-4">
-        Create a new liquidity pool for a token paired with WETH.
+        Initialize a new pool between two tokens at a starting price.
       </p>
 
       <div className="space-y-4">
+        <div className="flex gap-3">
+          <div className="flex-1 bg-[var(--bg-secondary)] rounded-xl p-4">
+            <span className="text-xs text-[var(--text-tertiary)] block mb-2">Token A</span>
+            <TokenButton token={tokenA} onClick={() => setShowA(true)} />
+          </div>
+          <div className="flex-1 bg-[var(--bg-secondary)] rounded-xl p-4">
+            <span className="text-xs text-[var(--text-tertiary)] block mb-2">Token B</span>
+            <TokenButton token={tokenB} onClick={() => setShowB(true)} />
+          </div>
+        </div>
+
         <div>
-          <label className="text-xs text-[var(--text-tertiary)] mb-1 block">Token Address</label>
+          <label className="text-xs text-[var(--text-tertiary)] mb-1 block">
+            Starting price (how many {currency1?.symbol} per {currency0?.symbol})
+          </label>
           <input
             type="text"
-            placeholder="0x..."
-            value={tokenAddress}
-            onChange={(e) => setTokenAddress(e.target.value.trim())}
+            inputMode="decimal"
+            placeholder="1.0"
+            value={price}
+            onChange={(e) => setPrice(e.target.value.replace(',', '.'))}
             className="w-full px-3 py-2 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] text-sm font-mono outline-none focus:border-[var(--accent)]"
           />
-          {tokenAddress && !valid && <p className="text-xs text-[var(--danger)] mt-1">Not a valid address</p>}
+          {!validPrice && price && <p className="text-xs text-[var(--danger)] mt-1">Enter a price greater than 0</p>}
         </div>
+
+        <p className="text-xs text-[var(--text-tertiary)] font-mono">
+          Pool: {currency0?.symbol} / {currency1?.symbol} (sorted by address)
+        </p>
       </div>
 
       <div className="mt-6">
         <NetworkGuard>
           <button
-            onClick={createExchange}
-            disabled={!valid || busy}
+            onClick={checkAndCreate}
+            disabled={sameToken || !validPrice || busyAll}
             className={`w-full py-3 rounded-xl font-semibold text-sm font-display transition-all ${
-              !valid
+              sameToken || !validPrice
                 ? 'bg-[var(--bg-secondary)] text-[var(--text-tertiary)] cursor-not-allowed'
-                : busy
+                : busyAll
                 ? 'bg-[var(--accent)]/50 text-white cursor-wait'
                 : 'bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]'
             }`}
           >
-            {!valid ? 'Enter a token address' : checking ? 'Checking...' : loading ? 'Creating...' : 'Create Exchange'}
+            {sameToken ? 'Choose two different tokens' : busy ? 'Checking...' : creating ? 'Creating...' : 'Create Pool'}
           </button>
         </NetworkGuard>
       </div>
+
+      <TokenSelectModal open={showA} onClose={() => setShowA(false)} onSelect={setTokenA} />
+      <TokenSelectModal open={showB} onClose={() => setShowB(false)} onSelect={setTokenB} />
     </div>
   )
 }

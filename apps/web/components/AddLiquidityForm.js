@@ -1,23 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { Contract } from 'ethers'
+import { Contract, BigNumber, utils } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { TOKEN_LIST, ROUTER_ADDRESS, ROUTER_ABI } from '../constants'
+import { TOKEN_LIST, ROUTER_ADDRESS, ROUTER_ABI, POOL_TICK_SPACING } from '../constants'
 import TokenSelectModal from './TokenSelectModal'
 import NetworkGuard from './NetworkGuard'
-import SlippageSettings from './SlippageSettings'
 import useTokenBalance from '../hooks/useTokenBalance'
 import useAllowance from '../hooks/useAllowance'
 import useApprove from '../hooks/useApprove'
 import useTransact from '../hooks/useTransact'
-import { getPoolReserves, toPathAddress } from '../lib/route'
-import {
-  parseAmount,
-  minAfterSlippage,
-  quote,
-  deadlineFromNow,
-  formatAmount,
-} from '../lib/amounts'
-import { DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES } from '../lib/config'
+import { buildPoolKey, isZeroForOne, getPoolState } from '../lib/pool'
+import { fullRangeLiquidityForAmounts, fullRangeTicks } from '../lib/liquidity'
+import { parseAmount, formatAmount } from '../lib/amounts'
+import { NATIVE_ADDRESS } from '../constants'
+
+const Q96 = BigNumber.from(2).pow(96)
 
 function TokenButton({ token, onClick }) {
   return (
@@ -34,6 +30,12 @@ function TokenButton({ token, onClick }) {
   )
 }
 
+/** The balanced counter-amount at the pool price: amount0 * (sqrtP/Q96)^2 (raw units). */
+function quoteAtPrice(sqrtP, amount, fromIsCurrency0) {
+  if (fromIsCurrency0) return amount.mul(sqrtP).mul(sqrtP).div(Q96).div(Q96)
+  return amount.mul(Q96).mul(Q96).div(sqrtP).div(sqrtP)
+}
+
 export default function AddLiquidityForm() {
   const { account, library } = useWeb3()
   const { run, pending: adding } = useTransact()
@@ -43,9 +45,7 @@ export default function AddLiquidityForm() {
   const [tokenB, setTokenB] = useState(TOKEN_LIST[2])
   const [amountA, setAmountA] = useState('')
   const [amountB, setAmountB] = useState('')
-  const [slippageBps, setSlippageBps] = useState(DEFAULT_SLIPPAGE_BPS)
-  const [deadlineMin, setDeadlineMin] = useState(DEFAULT_DEADLINE_MINUTES)
-  const [pool, setPool] = useState(undefined) // undefined = loading, null = no pool
+  const [pool, setPool] = useState(undefined) // undefined = loading, null = no pool, object = live
   const [showTokenA, setShowTokenA] = useState(false)
   const [showTokenB, setShowTokenB] = useState(false)
 
@@ -54,9 +54,10 @@ export default function AddLiquidityForm() {
   const allowA = useAllowance(tokenA, ROUTER_ADDRESS)
   const allowB = useAllowance(tokenB, ROUTER_ADDRESS)
 
-  const sameToken = toPathAddress(tokenA).toLowerCase() === toPathAddress(tokenB).toLowerCase()
+  const key = useMemo(() => buildPoolKey(tokenA, tokenB), [tokenA, tokenB])
+  const sameToken = tokenA.address === tokenB.address
+  const aIs0 = isZeroForOne(key, tokenA)
 
-  // Load pool reserves so the second amount can follow the pool ratio.
   useEffect(() => {
     if (!library || sameToken) {
       setPool(undefined)
@@ -64,21 +65,18 @@ export default function AddLiquidityForm() {
     }
     let cancelled = false
     setPool(undefined)
-    getPoolReserves(library, toPathAddress(tokenA), toPathAddress(tokenB))
-      .then((p) => {
-        if (!cancelled) setPool(p && p.reserveA.gt(0) && p.reserveB.gt(0) ? p : null)
-      })
+    getPoolState(library, key)
+      .then((s) => !cancelled && setPool(s.sqrtPriceX96.isZero() ? null : s))
       .catch(() => !cancelled && setPool(undefined))
     return () => { cancelled = true }
-  }, [library, tokenA, tokenB, sameToken])
+  }, [library, key, sameToken])
 
   const onChangeA = (v) => {
     if (!/^\d*\.?\d*$/.test(v)) return
     setAmountA(v)
     if (pool) {
       const a = parseAmount(v, tokenA.decimals)
-      const b = a && quote(a, pool.reserveA, pool.reserveB)
-      setAmountB(b ? formatAmount(b, tokenB.decimals, tokenB.decimals) : '')
+      setAmountB(a ? utils.formatUnits(quoteAtPrice(pool.sqrtPriceX96, a, aIs0), tokenB.decimals) : '')
     }
   }
 
@@ -87,13 +85,11 @@ export default function AddLiquidityForm() {
     setAmountB(v)
     if (pool) {
       const b = parseAmount(v, tokenB.decimals)
-      const a = b && quote(b, pool.reserveB, pool.reserveA)
-      setAmountA(a ? formatAmount(a, tokenA.decimals, tokenA.decimals) : '')
+      setAmountA(b ? utils.formatUnits(quoteAtPrice(pool.sqrtPriceX96, b, !aIs0), tokenA.decimals) : '')
     }
   }
 
   const pickToken = (side) => (t) => {
-    // changing a token invalidates both amounts (the ratio is pool-specific)
     side === 'A' ? setTokenA(t) : setTokenB(t)
     setAmountA('')
     setAmountB('')
@@ -102,36 +98,51 @@ export default function AddLiquidityForm() {
   const bnA = useMemo(() => parseAmount(amountA, tokenA.decimals), [amountA, tokenA])
   const bnB = useMemo(() => parseAmount(amountB, tokenB.decimals), [amountB, tokenB])
 
+  // Order the two amounts to currency0/currency1, then size a full-range liquidity delta.
+  const sizing = useMemo(() => {
+    if (!pool || !bnA || !bnB || bnA.isZero() || bnB.isZero()) return null
+    const amount0 = aIs0 ? bnA : bnB
+    const amount1 = aIs0 ? bnB : bnA
+    const { liquidity, tickLower, tickUpper } = fullRangeLiquidityForAmounts(
+      pool.sqrtPriceX96,
+      POOL_TICK_SPACING,
+      amount0,
+      amount1
+    )
+    return liquidity.gt(0) ? { liquidity, tickLower, tickUpper } : null
+  }, [pool, bnA, bnB, aIs0])
+
+  const nativeToken = tokenA.address === NATIVE_ADDRESS ? tokenA : tokenB.address === NATIVE_ADDRESS ? tokenB : null
+  const nativeAmount = nativeToken === tokenA ? bnA : nativeToken === tokenB ? bnB : null
+
   const needA = allowA.needsApproval(bnA)
   const needB = allowB.needsApproval(bnB)
-  const insufficientA = bnA ? bnA.gt(balanceA) : false
-  const insufficientB = bnB ? bnB.gt(balanceB) : false
+  const insufficientA = tokenA.address !== NATIVE_ADDRESS && bnA ? bnA.gt(balanceA) : false
+  const insufficientB = tokenB.address !== NATIVE_ADDRESS && bnB ? bnB.gt(balanceB) : false
 
   let status = null
   if (sameToken) status = 'Choose two different tokens'
   else if (pool === undefined && library) status = 'Loading pool...'
-  else if (!bnA || !bnB) status = 'Enter amounts'
+  else if (pool === null) status = 'No pool yet — create it first'
+  else if (!bnA || !bnB || bnA.isZero() || bnB.isZero()) status = 'Enter amounts'
+  else if (!sizing) status = 'Amounts too small'
   else if (insufficientA) status = `Insufficient ${tokenA.symbol} balance`
   else if (insufficientB) status = `Insufficient ${tokenB.symbol} balance`
 
   const addLiquidity = async () => {
-    if (!account || !library || !bnA || !bnB) return
+    if (!account || !library || !sizing || !pool) return
     const router = new Contract(ROUTER_ADDRESS, ROUTER_ABI, library.getSigner())
-    const deadline = deadlineFromNow(deadlineMin)
-    const minA = minAfterSlippage(bnA, slippageBps)
-    const minB = minAfterSlippage(bnB, slippageBps)
+    const { tickLower, tickUpper, liquidity } = sizing
     await run({
       label: `Add ${tokenA.symbol}/${tokenB.symbol}`,
-      successMessage: `Liquidity added: ${formatAmount(bnA, tokenA.decimals)} ${tokenA.symbol} / ${formatAmount(bnB, tokenB.decimals)} ${tokenB.symbol}`,
-      send: () => {
-        if (tokenA.address === 'NATIVE') {
-          return router.addLiquidityETH(tokenB.address, bnB, minB, minA, account, deadline, { value: bnA })
-        }
-        if (tokenB.address === 'NATIVE') {
-          return router.addLiquidityETH(tokenA.address, bnA, minA, minB, account, deadline, { value: bnB })
-        }
-        return router.addLiquidity(tokenA.address, tokenB.address, bnA, bnB, minA, minB, account, deadline)
-      },
+      successMessage: `Added liquidity to ${tokenA.symbol}/${tokenB.symbol}`,
+      send: () =>
+        router.modifyLiquidity(
+          key,
+          { tickLower, tickUpper, liquidityDelta: liquidity },
+          account,
+          nativeAmount ? { value: nativeAmount } : {}
+        ),
       onSuccess: () => {
         setAmountA('')
         setAmountB('')
@@ -143,14 +154,12 @@ export default function AddLiquidityForm() {
     })
   }
 
-  const rate =
-    pool && pool.reserveA.gt(0)
-      ? formatAmount(quote(parseAmount('1', tokenA.decimals), pool.reserveA, pool.reserveB), tokenB.decimals, 6)
-      : null
-
   return (
     <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-6 max-w-md mx-auto">
       <h2 className="text-xl font-semibold font-display text-[var(--text-primary)] mb-6">Add Liquidity</h2>
+      <p className="text-xs text-[var(--text-tertiary)] -mt-4 mb-5">
+        Deposits across the full price range ({fullRangeTicks(POOL_TICK_SPACING).tickLower} to {fullRangeTicks(POOL_TICK_SPACING).tickUpper}).
+      </p>
 
       <div className="space-y-3">
         <div className="bg-[var(--bg-secondary)] rounded-xl p-4">
@@ -201,24 +210,16 @@ export default function AddLiquidityForm() {
       <div className="mt-4 text-xs text-[var(--text-tertiary)] font-mono">
         {pool === null && !sameToken && (
           <p className="text-yellow-500">
-            No pool exists for this pair yet. You will be the first liquidity provider, and the
-            ratio you enter sets the starting price.
+            No pool exists for this pair yet. Create it first to set the starting price.
           </p>
         )}
-        {rate && (
-          <p>1 {tokenA.symbol} = {rate} {tokenB.symbol}</p>
+        {pool && sizing && (
+          <p>Liquidity: {formatAmount(sizing.liquidity, 18, 6)}</p>
         )}
       </div>
 
-      <SlippageSettings
-        bps={slippageBps}
-        onBpsChange={setSlippageBps}
-        deadline={deadlineMin}
-        onDeadlineChange={setDeadlineMin}
-      />
-
       <NetworkGuard>
-        <div className="space-y-2">
+        <div className="space-y-2 mt-4">
           {!status && needA && (
             <button
               onClick={() => approve(tokenA, ROUTER_ADDRESS, bnA, allowA.allowance, allowA.refetch)}

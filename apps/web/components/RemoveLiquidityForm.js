@@ -1,118 +1,117 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { Contract, BigNumber, utils } from 'ethers'
+import React, { useState, useEffect, useMemo } from 'react'
+import { Contract, BigNumber } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { TOKEN_LIST, ROUTER_ADDRESS, ROUTER_ABI, PAIR_ABI, ERC20_ABI } from '../constants'
+import { TOKEN_LIST, ROUTER_ADDRESS, ROUTER_ABI, POOL_TICK_SPACING } from '../constants'
+import TokenSelectModal from './TokenSelectModal'
 import NetworkGuard from './NetworkGuard'
-import SlippageSettings from './SlippageSettings'
-import useApprove from '../hooks/useApprove'
 import useTransact from '../hooks/useTransact'
-import { minAfterSlippage, deadlineFromNow, formatAmount } from '../lib/amounts'
-import { WETH_ADDRESS, DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES } from '../lib/config'
+import { buildPoolKey, isZeroForOne, getPoolState } from '../lib/pool'
+import { fullRangeTicks, fullRangeAmountsForLiquidity } from '../lib/liquidity'
+import { formatAmount } from '../lib/amounts'
+import { NATIVE_ADDRESS } from '../constants'
 
 const PERCENTS = [25, 50, 75, 100]
+const { tickLower, tickUpper } = fullRangeTicks(POOL_TICK_SPACING)
 
-function tokenInfo(address) {
-  return TOKEN_LIST.find((t) => t.address.toLowerCase() === address.toLowerCase())
+function TokenButton({ token, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border)] text-sm font-medium text-[var(--text-primary)]"
+    >
+      <img src={token.logo} alt={token.symbol} className="w-5 h-5 rounded-full" />
+      {token.symbol}
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+      </svg>
+    </button>
+  )
 }
 
 export default function RemoveLiquidityForm() {
-  const { account, library, wrongNetwork } = useWeb3()
+  const { account, library } = useWeb3()
   const { run, pending: removing } = useTransact()
-  const { approve, approving } = useApprove()
 
-  const [pairAddress, setPairAddress] = useState('')
-  const [info, setInfo] = useState(null)
+  const [tokenA, setTokenA] = useState(TOKEN_LIST[0])
+  const [tokenB, setTokenB] = useState(TOKEN_LIST[2])
   const [percent, setPercent] = useState(0)
-  const [receiveEth, setReceiveEth] = useState(true)
-  const [slippageBps, setSlippageBps] = useState(DEFAULT_SLIPPAGE_BPS)
-  const [deadlineMin, setDeadlineMin] = useState(DEFAULT_DEADLINE_MINUTES)
+  const [position, setPosition] = useState(null) // { liquidity, sqrtPriceX96 }
+  const [refresh, setRefresh] = useState(0)
+  const [showTokenA, setShowTokenA] = useState(false)
+  const [showTokenB, setShowTokenB] = useState(false)
 
-  const validPair = utils.isAddress(pairAddress)
-
-  const fetchPairInfo = useCallback(async () => {
-    if (!library || !account || !validPair || wrongNetwork) {
-      setInfo(null)
-      return
-    }
-    try {
-      const pair = new Contract(pairAddress, PAIR_ABI, library)
-      const [token0, token1, reserves, totalSupply, lpBalance, lpAllowance] = await Promise.all([
-        pair.token0(),
-        pair.token1(),
-        pair.getReserves(),
-        pair.totalSupply(),
-        pair.balanceOf(account),
-        pair.allowance(account, ROUTER_ADDRESS),
-      ])
-      const dec = async (a) => tokenInfo(a)?.decimals ?? (await new Contract(a, ERC20_ABI, library).decimals())
-      const [dec0, dec1] = await Promise.all([dec(token0), dec(token1)])
-      setInfo({
-        token0, token1, dec0, dec1,
-        reserve0: reserves._reserve0, reserve1: reserves._reserve1,
-        totalSupply, lpBalance, lpAllowance,
-      })
-    } catch {
-      setInfo(null)
-    }
-  }, [library, account, pairAddress, validPair, wrongNetwork])
+  const key = useMemo(() => buildPoolKey(tokenA, tokenB), [tokenA, tokenB])
+  const sameToken = tokenA.address === tokenB.address
+  const aIs0 = isZeroForOne(key, tokenA)
 
   useEffect(() => {
-    setPercent(0)
-    fetchPairInfo()
-  }, [fetchPairInfo])
+    if (!account || !library || sameToken) {
+      setPosition(null)
+      return
+    }
+    let cancelled = false
+    setPosition(null)
+    ;(async () => {
+      try {
+        const router = new Contract(ROUTER_ADDRESS, ROUTER_ABI, library)
+        const [liq, state] = await Promise.all([
+          router.getPositionLiquidity(account, key, tickLower, tickUpper),
+          getPoolState(library, key),
+        ])
+        if (cancelled) return
+        if (liq.isZero() || state.sqrtPriceX96.isZero()) setPosition(null)
+        else setPosition({ liquidity: liq, sqrtPriceX96: state.sqrtPriceX96 })
+      } catch {
+        if (!cancelled) setPosition(null)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [account, library, key, sameToken, refresh])
 
-  const liquidity = useMemo(
-    () => (info ? info.lpBalance.mul(percent).div(100) : BigNumber.from(0)),
-    [info, percent]
+  const pickToken = (side) => (t) => {
+    side === 'A' ? setTokenA(t) : setTokenB(t)
+    setPercent(0)
+  }
+
+  const liquidityToRemove = useMemo(
+    () => (position && percent > 0 ? position.liquidity.mul(percent).div(100) : BigNumber.from(0)),
+    [position, percent]
   )
 
-  // what the user gets back, from pool share
+  // What comes back: split the full-range amounts at the current price, ordered to tokenA/tokenB.
   const out = useMemo(() => {
-    if (!info || info.totalSupply.isZero() || liquidity.isZero()) return null
-    return {
-      a0: liquidity.mul(info.reserve0).div(info.totalSupply),
-      a1: liquidity.mul(info.reserve1).div(info.totalSupply),
-    }
-  }, [info, liquidity])
-
-  const hasWeth = info && [info.token0, info.token1].some((t) => t.toLowerCase() === WETH_ADDRESS.toLowerCase())
-  const sym = (addr, native) => (native ? 'ETH' : tokenInfo(addr)?.symbol || `${addr.slice(0, 6)}…`)
-  const useNative = Boolean(hasWeth && receiveEth)
-  const needsLpApproval = Boolean(info && liquidity.gt(0) && info.lpAllowance.lt(liquidity))
-
-  const approveLp = () =>
-    approve({ address: pairAddress, symbol: 'LP' }, ROUTER_ADDRESS, liquidity, info.lpAllowance, fetchPairInfo)
+    if (!position || liquidityToRemove.isZero()) return null
+    const { amount0, amount1 } = fullRangeAmountsForLiquidity(
+      position.sqrtPriceX96,
+      POOL_TICK_SPACING,
+      liquidityToRemove
+    )
+    return aIs0 ? { a: amount0, b: amount1 } : { a: amount1, b: amount0 }
+  }, [position, liquidityToRemove, aIs0])
 
   const removeLiquidity = async () => {
-    if (!account || !library || !info || !out || liquidity.isZero()) return
+    if (!account || !library || !position || liquidityToRemove.isZero()) return
     const router = new Contract(ROUTER_ADDRESS, ROUTER_ABI, library.getSigner())
-    const deadline = deadlineFromNow(deadlineMin)
-    const min0 = minAfterSlippage(out.a0, slippageBps)
-    const min1 = minAfterSlippage(out.a1, slippageBps)
     await run({
       label: 'Remove Liquidity',
-      successMessage: 'Liquidity removed',
-      send: () => {
-        if (useNative) {
-          const token0IsWeth = info.token0.toLowerCase() === WETH_ADDRESS.toLowerCase()
-          const token = token0IsWeth ? info.token1 : info.token0
-          const minToken = token0IsWeth ? min1 : min0
-          const minEth = token0IsWeth ? min0 : min1
-          return router.removeLiquidityETH(token, liquidity, minToken, minEth, account, deadline)
-        }
-        return router.removeLiquidity(info.token0, info.token1, liquidity, min0, min1, account, deadline)
-      },
+      successMessage: `Removed liquidity from ${tokenA.symbol}/${tokenB.symbol}`,
+      send: () =>
+        router.modifyLiquidity(
+          key,
+          { tickLower, tickUpper, liquidityDelta: liquidityToRemove.mul(-1) },
+          account
+        ),
       onSuccess: () => {
         setPercent(0)
-        fetchPairInfo()
+        setRefresh((r) => r + 1)
       },
     })
   }
 
   let status = null
-  if (!validPair) status = 'Enter a pair address'
-  else if (!info) status = 'Loading pair...'
-  else if (info.lpBalance.isZero()) status = 'You have no liquidity in this pair'
+  if (sameToken) status = 'Choose two different tokens'
+  else if (!position && library) status = 'No liquidity in this pool'
+  else if (!account) status = 'Connect a wallet'
   else if (percent === 0) status = 'Choose an amount'
 
   return (
@@ -120,36 +119,27 @@ export default function RemoveLiquidityForm() {
       <h2 className="text-xl font-semibold font-display text-[var(--text-primary)] mb-6">Remove Liquidity</h2>
 
       <div className="space-y-4">
-        <div>
-          <label className="text-xs text-[var(--text-tertiary)] mb-1 block">Pair Address (LP Token)</label>
-          <input
-            type="text"
-            placeholder="0x..."
-            value={pairAddress}
-            onChange={(e) => setPairAddress(e.target.value.trim())}
-            className="w-full px-3 py-2 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] text-sm font-mono outline-none focus:border-[var(--accent)]"
-          />
-          {pairAddress && !validPair && (
-            <p className="text-xs text-[var(--danger)] mt-1">Not a valid address</p>
-          )}
+        <div className="flex gap-3">
+          <div className="flex-1 bg-[var(--bg-secondary)] rounded-xl p-4">
+            <span className="text-xs text-[var(--text-tertiary)] block mb-2">Token A</span>
+            <TokenButton token={tokenA} onClick={() => setShowTokenA(true)} />
+          </div>
+          <div className="flex-1 bg-[var(--bg-secondary)] rounded-xl p-4">
+            <span className="text-xs text-[var(--text-tertiary)] block mb-2">Token B</span>
+            <TokenButton token={tokenB} onClick={() => setShowTokenB(true)} />
+          </div>
         </div>
 
-        {info && (
+        {position && (
           <div className="bg-[var(--bg-secondary)] rounded-xl p-3 text-sm">
             <p className="text-[var(--text-tertiary)]">
-              Pair:{' '}
-              <span className="text-[var(--text-primary)] font-mono">
-                {sym(info.token0)} / {sym(info.token1)}
-              </span>
-            </p>
-            <p className="text-[var(--text-tertiary)] mt-1">
-              LP Balance:{' '}
-              <span className="text-[var(--text-primary)] font-mono">{formatAmount(info.lpBalance, 18, 6) || '0'}</span>
+              Your position:{' '}
+              <span className="text-[var(--text-primary)] font-mono">{formatAmount(position.liquidity, 18, 6)}</span>
             </p>
           </div>
         )}
 
-        {info && !info.lpBalance.isZero() && (
+        {position && (
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-xs text-[var(--text-tertiary)]">Amount to remove</label>
@@ -180,68 +170,37 @@ export default function RemoveLiquidityForm() {
 
         {out && (
           <div className="bg-[var(--bg-secondary)] rounded-xl p-3 text-sm font-mono space-y-1">
-            <p className="text-xs text-[var(--text-tertiary)] font-body">You will receive (minimum shown after slippage)</p>
-            {[
-              { addr: info.token0, amt: out.a0, dec: info.dec0 },
-              { addr: info.token1, amt: out.a1, dec: info.dec1 },
-            ].map(({ addr, amt, dec }) => {
-              const native = useNative && addr.toLowerCase() === WETH_ADDRESS.toLowerCase()
-              return (
-                <p key={addr} className="flex justify-between text-[var(--text-primary)]">
-                  <span>{sym(addr, native)}</span>
-                  <span>
-                    {formatAmount(amt, dec, 6)}{' '}
-                    <span className="text-[var(--text-tertiary)]">(≥ {formatAmount(minAfterSlippage(amt, slippageBps), dec, 6)})</span>
-                  </span>
-                </p>
-              )
-            })}
+            <p className="text-xs text-[var(--text-tertiary)]">You will receive</p>
+            <p className="flex justify-between text-[var(--text-primary)]">
+              <span>{tokenA.symbol}</span>
+              <span>{formatAmount(out.a, tokenA.decimals, 6)}</span>
+            </p>
+            <p className="flex justify-between text-[var(--text-primary)]">
+              <span>{tokenB.symbol}</span>
+              <span>{formatAmount(out.b, tokenB.decimals, 6)}</span>
+            </p>
           </div>
-        )}
-
-        {hasWeth && (
-          <label className="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
-            <input type="checkbox" checked={receiveEth} onChange={(e) => setReceiveEth(e.target.checked)} />
-            Receive ETH instead of WETH
-          </label>
         )}
       </div>
 
-      <SlippageSettings
-        bps={slippageBps}
-        onBpsChange={setSlippageBps}
-        deadline={deadlineMin}
-        onDeadlineChange={setDeadlineMin}
-      />
-
       <NetworkGuard>
-        {status ? (
-          <button
-            disabled
-            className="w-full py-3 rounded-xl font-semibold text-sm font-display bg-[var(--bg-secondary)] text-[var(--text-tertiary)] cursor-not-allowed"
-          >
-            {status}
-          </button>
-        ) : needsLpApproval ? (
-          <button
-            onClick={approveLp}
-            disabled={approving}
-            className="w-full py-3 rounded-xl font-semibold text-sm font-display bg-yellow-500/20 text-yellow-500 hover:bg-yellow-500/30 transition-colors"
-          >
-            {approving ? 'Approving...' : 'Approve LP tokens'}
-          </button>
-        ) : (
-          <button
-            onClick={removeLiquidity}
-            disabled={removing}
-            className={`w-full py-3 rounded-xl font-semibold text-sm font-display transition-all ${
-              removing ? 'bg-[var(--danger)]/50 text-white cursor-wait' : 'bg-[var(--danger)] text-white hover:opacity-90'
-            }`}
-          >
-            {removing ? 'Removing...' : 'Remove Liquidity'}
-          </button>
-        )}
+        <button
+          onClick={removeLiquidity}
+          disabled={Boolean(status) || removing}
+          className={`w-full mt-4 py-3 rounded-xl font-semibold text-sm font-display transition-all ${
+            status
+              ? 'bg-[var(--bg-secondary)] text-[var(--text-tertiary)] cursor-not-allowed'
+              : removing
+              ? 'bg-[var(--danger)]/50 text-white cursor-wait'
+              : 'bg-[var(--danger)] text-white hover:opacity-90'
+          }`}
+        >
+          {status || (removing ? 'Removing...' : 'Remove Liquidity')}
+        </button>
       </NetworkGuard>
+
+      <TokenSelectModal open={showTokenA} onClose={() => setShowTokenA(false)} onSelect={pickToken('A')} />
+      <TokenSelectModal open={showTokenB} onClose={() => setShowTokenB(false)} onSelect={pickToken('B')} />
     </div>
   )
 }

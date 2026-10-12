@@ -6,7 +6,7 @@ import { WalletLinkConnector } from '@web3-react/walletlink-connector'
 import { ethers } from 'ethers'
 import { REQUIRED_CHAIN_ID, CHAINS } from '../lib/config'
 
-const injected = new InjectedConnector({ supportedChainIds: [1, 3, 4, 5, 42] })
+const injected = new InjectedConnector({ supportedChainIds: [31337, 1, 11155111] })
 
 const walletconnect = new WalletConnectConnector({
   rpc: { 1: 'https://mainnet.infura.io/v3/' },
