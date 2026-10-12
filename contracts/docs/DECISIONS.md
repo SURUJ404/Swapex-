@@ -241,3 +241,16 @@ out, only part of the input spent) rather than reverting, which is poor UX and c
 minimum-output floor gives "all-or-nothing": either the trade clears the user's price or the whole
 transaction reverts. It is purely additive (a zero floor reproduces prior behavior exactly), so
 existing call sites only needed the extra argument.
+
+
+## D26 - Router tracks per-user position liquidity so Remove is attributable
+**Decision:** The Router keeps a `mapping(address => mapping(bytes32 => uint128))` registry of the
+liquidity each wallet contributed to a position slot, updated in `modifyLiquidity` (credited on add,
+debited on remove, reverting `InsufficientPositionLiquidity` on over-removal). Exposed via
+`getPositionLiquidity(user, key, tickLower, tickUpper)`.
+**Rationale:** PoolManager keys a position by the *caller* of `modifyLiquidity` (address(this) == the
+Router), so every user's liquidity merges into one on-chain slot per (pool, range). Without a
+per-user registry a front-end could not know how much liquidity a wallet owns and could not size a
+correct removal. Known limitation: trading fees still accrue to the *merged* slot, so the first user
+to remove sweeps the whole slot's accrued fees; a full per-user PositionManager (tracking fees per
+beneficiary) is future work. For the single-provider local demo this is sufficient.

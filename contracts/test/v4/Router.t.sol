@@ -171,4 +171,33 @@ contract RouterTest is Test {
     function token0Balance(PoolKey memory key) internal view returns (uint256) {
         return MockERC20(currency.unwrap(key.currency0)).balanceOf(address(this));
     }
+
+    function test_positionRegistry_tracksUserLiquidity() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+
+        router.modifyLiquidity(
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+        );
+        assertEq(router.getPositionLiquidity(address(this), key, -6000, 6000), 1e18, "add credited");
+
+        router.modifyLiquidity(
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -4e17}), address(this)
+        );
+        assertEq(router.getPositionLiquidity(address(this), key, -6000, 6000), 6e17, "remove debited");
+    }
+
+    function test_positionRegistry_revertsOverRemoval() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+
+        router.modifyLiquidity(
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+        );
+        // the user only owns 1e18; asking for more must revert so they can't spend another's share
+        vm.expectRevert();
+        router.modifyLiquidity(
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -2e18}), address(this)
+        );
+    }
 }

@@ -39,6 +39,15 @@ contract Router is IUnlockCallback {
     error PathTooShort();
     error PathCurrenciesDisjoint();
     error InsufficientOutputAmount(int256 amountOut, uint256 minAmountOut);
+    error InsufficientPositionLiquidity(uint128 requested, uint128 available);
+
+    // ---------------------------------------------------------------- position registry
+    // The manager keys positions by the *caller* of `modifyLiquidity` (this router), so every
+    // user's liquidity merges into one on-chain slot per (pool, range). This registry tracks each
+    // beneficiary's share so `removeLiquidity` can be attributed and over-removal rejected. Fees
+    // still accrue to the merged slot (see DECISIONS.md D26 — a full per-user position manager is
+    // future work; for the single-provider demo frontend this is sufficient).
+    mapping(address => mapping(bytes32 => uint128)) private _positionLiquidity;
 
     constructor(PoolManager _pm) {
         pm = _pm;
@@ -103,7 +112,40 @@ contract Router is IUnlockCallback {
         _liqParams = mp;
         _op = OP_LIQ;
         pm.unlock("");
+        _recordPosition(msg.sender, key, mp);
         return (_liqCallerDelta, _liqFees);
+    }
+
+    /// @notice the liquidity `user` contributed to the given position slot (0 if none). Lets a
+    ///         front-end read back how much of a range a wallet owns so it can size a removal.
+    function getPositionLiquidity(address user, PoolKey memory key, int24 tickLower, int24 tickUpper)
+        external
+        view
+        returns (uint128)
+    {
+        return _positionLiquidity[user][_positionId(key, tickLower, tickUpper)];
+    }
+
+    function _positionId(PoolKey memory key, int24 tickLower, int24 tickUpper) private pure returns (bytes32) {
+        return keccak256(abi.encode(key.toPoolId(), tickLower, tickUpper));
+    }
+
+    /// @dev attribute a liquidity delta to the beneficiary (the router's caller). A removal larger
+    ///      than what the caller previously added reverts, so one wallet can't spend another's.
+    function _recordPosition(address user, PoolKey memory key, ModifyLiquidityParams memory mp) private {
+        if (mp.liquidityDelta == 0) return;
+        bytes32 id = _positionId(key, mp.tickLower, mp.tickUpper);
+        if (mp.liquidityDelta > 0) {
+            _positionLiquidity[user][id] += uint128(uint256(mp.liquidityDelta));
+        } else {
+            uint128 amount = uint128(uint256(-mp.liquidityDelta));
+            uint128 current = _positionLiquidity[user][id];
+            if (current < amount) revert InsufficientPositionLiquidity(amount, current);
+            unchecked {
+                // safe: guarded by the `current < amount` check above
+                _positionLiquidity[user][id] = current - amount;
+            }
+        }
     }
 
     function unlockCallback(bytes calldata) external returns (bytes memory) {
