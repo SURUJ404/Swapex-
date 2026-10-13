@@ -15,10 +15,11 @@ const PK =
   process.env.PRIVATE_KEY ||
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' // anvil #0
 
-const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'
-const QUOTER = process.env.NEXT_PUBLIC_QUOTER || '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0'
-const SWA = process.env.NEXT_PUBLIC_SWA || '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9'
-const SWB = process.env.NEXT_PUBLIC_SWB || '0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9'
+const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x7969c5eD335650692Bc04293B07F5BF2e7A673C0'
+const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x7bc06c482DEAd17c0e297aFbC32f6e63d3846650'
+const QUOTER = process.env.NEXT_PUBLIC_QUOTER || '0xc351628EB244ec633d5f21fBD6621e1a683B1181'
+const SWA = process.env.NEXT_PUBLIC_SWA || '0xFD471836031dc5108809D173A067e8486B9047A3'
+const SWB = process.env.NEXT_PUBLIC_SWB || '0xcbEAF3BDe82155F56486Fb5a1072cb8baAf547cc'
 const ZERO = '0x0000000000000000000000000000000000000000'
 const MIN_SQRT = ethers.BigNumber.from('4295128739').add(1)
 const MAX_SQRT = ethers.BigNumber.from('1461446703485210103287273052203988822378723970342').sub(1)
@@ -75,7 +76,14 @@ console.log(`signer ${wallet.address} on ${(await provider.getNetwork()).chainId
   const quotedOut = zfo ? q1 : q0
   ok(quotedOut.gt(0), `quote SWA->SWB returns positive output (${ethers.utils.formatUnits(quotedOut, 18)})`)
 
-  await (await swa.approve(ROUTER, amountIn)).wait()
+  // two-grant model: ERC-20 allowance to the AllowanceTransfer (once), then a bounded,
+  // expiring grant from it to the Router -- exactly what hooks/useApprove.js does in the app.
+  const at = new ethers.Contract(AT, abi('AllowanceTransfer'), wallet)
+  if ((await swa.allowance(wallet.address, AT)).lt(amountIn)) {
+    await (await swa.approve(AT, ethers.constants.MaxUint256)).wait()
+  }
+  const block1 = await provider.getBlock('latest')
+  await (await at.setAllowance(SWA, ROUTER, amountIn, block1.timestamp + 3600)).wait()
   const before = await swb.balanceOf(wallet.address)
   const minOut = quotedOut.mul(995).div(1000)
   const tx = await router.exactInputSingle(k, sp, wallet.address, minOut)

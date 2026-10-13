@@ -2,19 +2,27 @@ import PoolManagerAbi from './abi/PoolManager.json'
 import RouterAbi from './abi/Router.json'
 import QuoterAbi from './abi/Quoter.json'
 import Erc20Abi from './abi/ERC20.json'
+import AllowanceTransferAbi from './abi/AllowanceTransfer.json'
 
 // ---- V4 core (Swapex singleton + periphery). Defaults are the deterministic anvil addresses
 // produced by `contracts/script/Deploy.s.sol`; override via env for any other deployment.
+// NOTE: Deploy.s.sol deploys AllowanceTransfer between PoolManager and Router, so every address
+// after PoolManager shifts whenever the script is re-run on a chain with existing nonces.
 export const POOL_MANAGER_ADDRESS =
-  process.env.NEXT_PUBLIC_POOL_MANAGER || '0x5FbDB2315678afecb367f032d93F642f64180aa3'
+  process.env.NEXT_PUBLIC_POOL_MANAGER || '0x2bdCC0de6bE1f7D2ee689a0342D76F52E8EFABa3'
+export const ALLOWANCE_TRANSFER_ADDRESS =
+  process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x7969c5eD335650692Bc04293B07F5BF2e7A673C0'
 export const ROUTER_ADDRESS =
-  process.env.NEXT_PUBLIC_ROUTER || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'
+  process.env.NEXT_PUBLIC_ROUTER || '0x7bc06c482DEAd17c0e297aFbC32f6e63d3846650'
 export const QUOTER_ADDRESS =
-  process.env.NEXT_PUBLIC_QUOTER || '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0'
+  process.env.NEXT_PUBLIC_QUOTER || '0xc351628EB244ec633d5f21fBD6621e1a683B1181'
 
 export const POOL_MANAGER_ABI = PoolManagerAbi
 export const ROUTER_ABI = RouterAbi
 export const QUOTER_ABI = QuoterAbi
+// bounded per-spender grants: the wallet grants this contract (not the Router) a one-time ERC-20
+// allowance, then it grants the Router an amount-bounded, expiring spend out of it
+export const ALLOWANCE_TRANSFER_ABI = AllowanceTransferAbi
 // minimal ERC-20 surface used by the balance / allowance / approve hooks
 export const ERC20_ABI = Erc20Abi
 
@@ -46,21 +54,21 @@ export const TOKEN_LIST = [
   {
     symbol: 'SWA',
     name: 'Swapex A',
-    address: process.env.NEXT_PUBLIC_SWA || '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9',
+    address: process.env.NEXT_PUBLIC_SWA || '0xFD471836031dc5108809D173A067e8486B9047A3',
     decimals: 18,
     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
   },
   {
     symbol: 'SWB',
     name: 'Swapex B',
-    address: process.env.NEXT_PUBLIC_SWB || '0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9',
+    address: process.env.NEXT_PUBLIC_SWB || '0xcbEAF3BDe82155F56486Fb5a1072cb8baAf547cc',
     decimals: 18,
     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
   },
   {
     symbol: 'SWC',
     name: 'Swapex C',
-    address: process.env.NEXT_PUBLIC_SWC || '0x5FC8d32690cc91D4c39d9d3abcBD16989F875707',
+    address: process.env.NEXT_PUBLIC_SWC || '0x1429859428C0aBc9C2C47C8Ee9FBaf82cFA0F20f',
     decimals: 18,
     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
   },

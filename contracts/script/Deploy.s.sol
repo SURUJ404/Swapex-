@@ -59,6 +59,7 @@ contract Deploy is Script {
         vm.stopBroadcast();
 
         console.log("POOL_MANAGER=%s", address(pm));
+        console.log("ALLOWANCE_TRANSFER=%s", address(at));
         console.log("ROUTER=%s", address(router));
         console.log("QUOTER=%s", address(quoter));
         console.log("SWA=%s", address(swa));

@@ -13,8 +13,9 @@ const abi = (name) => JSON.parse(readFileSync(join(__dirname, '..', 'constants',
 
 const RPC = process.env.RPC_URL || 'http://127.0.0.1:8545'
 const PK = process.env.PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
-const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'
-const SWA = process.env.NEXT_PUBLIC_SWA || '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9'
+const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x7969c5eD335650692Bc04293B07F5BF2e7A673C0'
+const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x7bc06c482DEAd17c0e297aFbC32f6e63d3846650'
+const SWA = process.env.NEXT_PUBLIC_SWA || '0xFD471836031dc5108809D173A067e8486B9047A3'
 const ZERO = '0x0000000000000000000000000000000000000000'
 const TICK_SPACING = 60
 
@@ -26,7 +27,7 @@ function ok(cond, msg) {
 const provider = new ethers.providers.JsonRpcProvider(RPC)
 const wallet = new ethers.Wallet(PK, provider)
 const router = new ethers.Contract(ROUTER, abi('Router'), wallet)
-const pm = new ethers.Contract(process.env.NEXT_PUBLIC_POOL_MANAGER || '0x5FbDB2315678afecb367f032d93F642f64180aa3', abi('PoolManager'), provider)
+const pm = new ethers.Contract(process.env.NEXT_PUBLIC_POOL_MANAGER || '0x2bdCC0de6bE1f7D2ee689a0342D76F52E8EFABa3', abi('PoolManager'), provider)
 const swa = new ethers.Contract(SWA, abi('ERC20'), wallet)
 
 // native (address 0) sorts first -> currency0 = native, currency1 = SWA
@@ -50,7 +51,14 @@ const owed = fullRangeAmountsForLiquidity(sqrtP, TICK_SPACING, liquidity)
 ok(owed.amount0.lte(amount0) && owed.amount1.lte(amount1), `lib amounts within intended deposit`)
 
 const swaBefore = await swa.balanceOf(wallet.address)
-await (await swa.approve(ROUTER, amount1)).wait()
+// two-grant model: ERC-20 allowance to the AllowanceTransfer (once), then a bounded,
+// expiring grant from it to the Router -- exactly what hooks/useApprove.js does in the app.
+const at = new ethers.Contract(AT, abi('AllowanceTransfer'), wallet)
+if ((await swa.allowance(wallet.address, AT)).lt(amount1)) {
+  await (await swa.approve(AT, ethers.constants.MaxUint256)).wait()
+}
+const block1 = await provider.getBlock('latest')
+await (await at.setAllowance(SWA, ROUTER, amount1, block1.timestamp + 3600)).wait()
 
 const tx = await router.modifyLiquidity(
   key,
