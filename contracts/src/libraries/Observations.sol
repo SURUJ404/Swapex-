@@ -14,9 +14,12 @@ library Observations {
         bool initialized; // whether the observation has been written
     }
 
-    /// @dev Overwrite slot 0 with the bootstrap observation (t = 0, cumulatives zeroed).
-    function initialize(Observation[65535] storage self) internal {
-        self[0] = Observation({blockTimestamp: 0, tickCumulative: 0, secondsPerLiquidityCumulativeX128: 0, initialized: true});
+    /// @dev Overwrite slot 0 with the bootstrap observation, stamped with the pool's creation
+    ///      time and zeroed cumulatives. Stamping `time` (not epoch 0) means a window that
+    ///      predates pool creation truncates to this bootstrap instead of interpolating fake
+    ///      pre-creation tick history (Unix epoch > pool creation in any real deployment).
+    function initialize(Observation[65535] storage self, uint32 time) internal {
+        self[0] = Observation({blockTimestamp: time, tickCumulative: 0, secondsPerLiquidityCumulativeX128: 0, initialized: true});
     }
 
     /// @notice Advance the cumulatives from the newest observation up to `blockTimestamp` using the

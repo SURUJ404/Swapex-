@@ -174,8 +174,8 @@ contract HooksTest is Test {
         _swapExactIn(key, 1e18);
 
         (uint160 expectedPrice,) = pm.getSlot0(key);
-        assertEq(OracleHook(hook).priceAtPoolId(PoolId.unwrap(key.toPoolId())), expectedPrice, "oracle recorded price");
-        assertEq(OracleHook(hook).lastPrice(), expectedPrice, "lastPrice matches");
+        assertEq(OracleHook(hook).lastSwapSqrtPriceAtPoolId(PoolId.unwrap(key.toPoolId())), expectedPrice, "hook recorded post-swap spot");
+        assertEq(OracleHook(hook).lastSwapSqrtPrice(), expectedPrice, "lastSwapSqrtPrice matches");
         assertGt(expectedPrice, 0, "price is set");
     }
 

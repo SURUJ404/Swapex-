@@ -201,6 +201,25 @@ and no new reentrancy, arithmetic or arbitrary-send instance appeared.
 | `missing-zero-check` on `recipient` | `exactInputSingleWithPermit.recipient` | **Pre-existing, unchanged.** `recipient == address(0)` means "burn to zero address", which is the caller's own choice (same as every Uniswap router); the swap can only move the caller's own funds there. |
 
 
+## Phase 8 - crypto D TWAP oracle hardening (Slither re-run)
+
+Re-ran Slither 0.11.6 after the D change (`Observations.initialize(time)` creation-stamped
+bootstrap, new `src/v3/TwapGuard.sol`, `OracleHook` spot-recorder rename - D33), same
+invocation as Phase 7:
+
+```
+analyzed (53 contracts with 102 detectors), 82 result(s) found
+```
+
+**+4 vs Phase 7 (78 -> 82), +1 contract.** All four new instances are inside
+`TwapGuard.consult`; none is a defect, and nothing in the bootstrap-stamp or hook-rename
+changes is flagged.
+
+| Detector | Location | Assessment |
+|---|---|---|
+| `unused-return` (3, new) | `TwapGuard.consult`: `pool.observations(oldestIdx)` (`TwapGuard.sol#44`), `pool.observeSingle(window)` (`#53`), `pool.observeSingle(0)` (`#54`) | **Accepted - partial destructuring.** The values the policy *does* use (`oldestTs`, `cStart`, `cEnd`) are read into named locals; the discarded components (`tickCumulative` of the coverage read, `secondsPerLiquidityCumulative*`, `initialized`) are genuinely unused - `consult` averages ticks only. Same class as the accepted `pm.unlock()` instances (Phases 3/7). |
+| `timestamp` (new, 1 instance) | `TwapGuard.consult` window comparisons (`nowTs < window` `#46`, `oldestTs > target` `#48`) | **Accepted - same ruling as Phases 5, 6 and 7.** The whole point of D is wall-clock window semantics: a TWAP window *is* `block.timestamp` arithmetic, and the threat removed (value decisions on windows the ring does not cover) is the one D33 exists for. Second-scale skew shifts a window into an adjacent block, where the same coverage rule still applies. |
+
 ## Aderyn 0.6.8 — 7 High / 18 Low, all triaged (one fixed)
 
 **How it ran.** Aderyn ships no Windows prebuilt binary (the GitHub releases contain only

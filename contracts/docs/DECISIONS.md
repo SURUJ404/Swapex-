@@ -422,3 +422,52 @@ mempool exposure entirely on the networks where MEV matters.
 **Decision:** not built. Recorded here and in `docs/MEV.md` (the honest evaluation B.2 asked for)
 and `docs/CRYPTO_DECISIONS.md` (rejected-alternatives row). What stops sandwiching in this repo is
 D31 bounds + deadlines now, and private RPC submission on real networks later (B.3 docs).
+
+## D33 - TWAP oracle hardening: creation-stamped bootstrap + TwapGuard read policy (D)
+
+**Context:** D of the A-I list (min window, cardinality, no-spot-read rule, flash-loan push
+test). Survey: the V3 pools carry the real oracle (`Observations` ring, D5-D11); V4 core has no
+observation ring at all (deliberately hooks-based); `OracleHook` advertised a "TWAP-style feed"
+while storing only the latest post-swap spot price.
+
+**Findings:**
+
+1. `Observations.initialize()` stamped the bootstrap observation at `blockTimestamp: 0` (unix
+   epoch) instead of pool creation time. On any live chain (timestamp >> 0) a window older than
+   a young pool's history did *not* truncate to the bootstrap the way D7 intended - it
+   interpolated between the epoch-0 bootstrap and the first real write, treating the
+   initialization tick as if it had held since 1970: a silent wrong value, invisible to tests
+   that genesis at `vm.warp(0)` (both oracle suites do).
+2. The raw `observe*` API cannot tell a caller whether the ring actually covers the requested
+   window (D7 truncation returns a value either way). A consumer dividing by the *requested*
+   window length has no error signal - the classic silent-truncation oracle hazard.
+3. Nothing in-repo consumed spot for value decisions (web quotes are spot-by-design but settle
+   through D31 bounds), so the enforceable rule could live entirely in a guarded reader.
+
+**Decision:**
+
+* `Observations.initialize(time)` now stamps `blockTimestamp: time`;
+  `SwapexPool.initialize` passes `uint32(block.timestamp)`. The bootstrap *is* the pool's
+  creation time; windows older than the pool truncate to zeroed cumulatives (D7 restored for
+  real timestamps; golden vectors genesis at `vm.warp(0)` and are unaffected).
+* New `src/v3/TwapGuard.sol` - the enforceable no-spot-read + min-window + coverage rule for
+  anything that would move money on the oracle. `consult(pool, window)` refuses
+  `window < TWAP_MIN_WINDOW` (30 minutes, `OracleWindowTooShort`), refuses windows reaching
+  before the oldest retained observation (`OracleWindowNotCovered(requested, covered)` - the
+  oldest observation is what defines coverage, so it is checked directly against the ring, not
+  inferred), refuses uninitialized pools, and only then returns the time-weighted average tick
+  from two `observeSingle` reads. No `slot0` read anywhere on the path.
+* `OracleHook` demoted in name and contract: `priceAtPoolId`/`lastPrice` ->
+  `lastSwapSqrtPriceAtPoolId`/`lastSwapSqrtPrice`; the header states it is a spot recorder,
+  not an oracle, and points at `TwapGuard` for time-weighted reads.
+* Cardinality policy unchanged (D8 stands): default 1, lazy permissionless growth. TwapGuard
+  turns "not grown far enough" into an explicit revert instead of a wrong number, which is the
+  part that actually needed enforcing.
+
+**Verification:** +7 tests in `TwapGuard.t.sol` (min-window floor pinned to 1800, coverage
+revert with exact `covered` seconds, held-twap-through-guard, same-block slam-and-return moves
+spot while the guarded TWAP moves <= 1 tick, creation-stamped bootstrap + fake-epoch regression
+where `observeSingle` must return 0 rather than `6000 * 998300`, uninitialized-pool revert)
+=> `forge test` 204 passed; OracleGolden still green; Slither Phase 8: 53 contracts, 82 results
+(+4, all inside `TwapGuard.consult`, accepted - `SECURITY.md` Phase 8). No manifest rotation:
+none of the changed contracts is deployed by `Deploy.s.sol`.

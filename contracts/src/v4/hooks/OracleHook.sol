@@ -5,17 +5,21 @@ import {PoolManager, SwapParams} from "../PoolManager.sol";
 import {PoolKey, PoolId, toPoolId} from "../types/PoolKey.sol";
 import {BalanceDelta} from "../types/BalanceDelta.sol";
 
-/// @notice Reference oracle hook. Mines with AFTER_SWAP_FLAG; after every swap it records the
-///         pool's post-swap sqrt price keyed by PoolId, giving a read-only TWAP-style feed. It only
-///         observes (a view call back into the manager) and writes to its own storage, so it cannot
-///         affect settlement.
+/// @notice Reference post-swap price RECORDER - not a TWAP oracle. Mines with AFTER_SWAP_FLAG
+///         and stores each pool's post-swap sqrt price keyed by PoolId. This is a spot feed:
+///         a single swap (or flash-style slam-and-return inside one block) moves it, so it must
+///         never be used for value decisions - liquidations, mint/swap bounds, pricing. The V4
+///         core deliberately has no observation ring; manipulation-resistant time-weighted reads
+///         live in the V3 pool oracle behind `TwapGuard` (contracts/docs/DECISIONS.md D33).
+///         It only observes (a view call back into the manager) and writes to its own storage,
+///         so it cannot affect settlement.
 contract OracleHook {
-    mapping(bytes32 => uint160) public priceAtPoolId;
-    uint160 public lastPrice;
+    mapping(bytes32 => uint160) public lastSwapSqrtPriceAtPoolId;
+    uint160 public lastSwapSqrtPrice;
 
     function afterSwap(PoolKey calldata key, SwapParams calldata, BalanceDelta, bytes calldata) external {
         (uint160 sqrtPriceX96,) = PoolManager(msg.sender).getSlot0(key);
-        priceAtPoolId[PoolId.unwrap(key.toPoolId())] = sqrtPriceX96;
-        lastPrice = sqrtPriceX96;
+        lastSwapSqrtPriceAtPoolId[PoolId.unwrap(key.toPoolId())] = sqrtPriceX96;
+        lastSwapSqrtPrice = sqrtPriceX96;
     }
 }

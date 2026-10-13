@@ -90,7 +90,12 @@ test('PermitSingle signed in the browser: lands once; replay, wrong chain, and e
   while (nonce < 128 && (await at.isNonceUsed(owner, nonce))) nonce++;
   expect(nonce).toBeLessThan(128);
 
-  const now = (await provider.getBlock('latest')).timestamp;
+  // anchor the deadline to max(chain, wall): anvil stamps new blocks with wall-clock time, so
+  // after >1h of idle the latest block's timestamp + 3600 can already be in the past
+  const now = Math.max(
+    (await provider.getBlock('latest')).timestamp,
+    Math.floor(Date.now() / 1000)
+  );
   const message = {
     details: {
       token: SWA,

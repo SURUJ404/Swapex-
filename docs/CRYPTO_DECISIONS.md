@@ -205,8 +205,8 @@ at rest (both layers re-checked per fill in `_ensureSpendRights`).
   same as the Router (documented in TESTNET_SECURITY: mock tokens only).
 
 **Verified by:** `forge test --match-contract LimitOrdersTest` → **28 passed, 0 failed** (2 fuzz
-tests at `--fuzz-runs 5000`); `forge test` full suite → **197 passed, 0 failed** (the suite grows
-with each subsequent item; B.1 added 9, F.1 added 10).
+tests at `--fuzz-runs 5000`); `forge test` full suite → **204 passed, 0 failed** (the suite grows
+with each subsequent item; F.1 added 10, B.1 added 9, D added 7).
 
 ---
 
@@ -335,6 +335,70 @@ in `contracts/docs/DECISIONS.md` **D31**.
   bounds that are too tight turn price movement into a revert. Both failures are safe (nothing
   executed) and recoverable (resubmit), unlike the unfunded failures they replace.
 
+## D - TWAP oracle hardening (creation-stamped bootstrap + TwapGuard read policy)
+
+### Threat
+
+1. **Spot mistaken for an oracle.** V4's `OracleHook` advertised a "TWAP-style feed" while
+   storing only the latest post-swap price: one swap - or a flash-style slam-and-return inside
+   a single block - moves it. A liquidation, fill or UI price consuming it is attacker-settable.
+2. **Silent window truncation.** The ring returns its oldest cumulative for windows it does not
+   cover (D7: truncate, do not revert - reference-model parity). A consumer dividing by the
+   *requested* window length gets a wrong average with no error signal.
+3. **Fake epoch history.** The bootstrap observation was stamped `blockTimestamp: 0`. On a live
+   chain, a young pool's pre-creation window interpolated the initialization tick backwards to
+   1970 instead of truncating at creation (D7's intent) - a second silent-wrong-value path that
+   tests genesising at `vm.warp(0)` can never see.
+4. **Sub-minimum windows.** A few-second "TWAP" is dominated by exactly the same-block
+   manipulation a TWAP exists to resist.
+
+### Primitive / decision
+
+No cryptographic primitive: validation, on top of the existing observation ring. The
+enforceable rule lives in a guarded reader - `src/v3/TwapGuard.sol::consult(pool, window)` -
+which refuses `window < TWAP_MIN_WINDOW` (30 min), refuses windows reaching before the oldest
+retained observation (reporting actual coverage), refuses uninitialized pools, and only then
+time-weights via two `observeSingle` reads - never `slot0`. `Observations.initialize` now
+stamps pool creation time so pre-creation windows truncate to the bootstrap instead of
+interpolating fake history. `OracleHook` was renamed to what it is (`lastSwapSqrtPrice*`) and
+documented as spot-only. Cardinality policy unchanged (D8): growth stays permissionless, and
+"not grown enough" is now an explicit revert. Full rationale in `contracts/docs/DECISIONS.md`
+**D33**.
+
+### Rejected alternatives
+
+* *Reverting inside `observe*` on uncovered windows.* Reopens D7 (recorded: truncation over
+  revert, reference parity, golden vectors) and breaks benign raw reads; the hazard exists only
+  for value decisions, so the policy binds the value-decision reader instead.
+* *Raising the default cardinality (reopening D8).* Growth is permissionless and cheap; a
+  larger default taxes every pool for a consumer that may not exist, and still cannot answer
+  "is *this* window covered?" - coverage is per read.
+* *A full V4 ring-oracle hook.* V4 core deliberately has no observations (hooks would carry
+  that burden); no in-repo consumer exists, and a hook-side ring would re-introduce exactly the
+  cardinality/truncation questions just settled on V3. Deferred until something needs it.
+* *OracleLibrary-style tick-to-quote conversion inside the guard.* No consumer prices from the
+  oracle today; quote math in the guard would be speculative surface (web quotes are
+  spot-by-design and settle through D31 bounds).
+
+### Assumptions
+
+* Anything that moves money on a price uses `TwapGuard.consult` (or an equivalent
+  coverage-checked reader); raw `observe*` stays available for benign/analytic reads (D7).
+* 30 minutes is a policy floor, not a theorem: long enough that same-block/same-minute
+  manipulation carries negligible weight in the average; call sites may require more.
+* Consumers grow cardinality first when they need more history; the revert tells them when.
+
+### What breaks
+
+* `Observations.initialize` gained a parameter (library-internal; only `SwapexPool` calls it).
+  Raw `observe*` results for *pre-creation* windows changed from fake interpolation to
+  truncation - that is the fix; golden vectors genesis at `vm.warp(0)` and are unaffected.
+* A pool younger than 30 minutes, or one whose ring never grew past bootstrap, cannot be
+  consulted (`OracleWindowTooShort` / `OracleWindowNotCovered`) - by design.
+* `OracleHook`'s public names changed (`priceAtPoolId`/`lastPrice` ->
+  `lastSwapSqrtPriceAtPoolId`/`lastSwapSqrtPrice`): an ABI break for anyone who treated the
+  spot recorder as an oracle (nothing in-repo did; tests updated).
+
 ---
 
 ## Verification (commands + results, run on this repository)
@@ -342,7 +406,7 @@ in `contracts/docs/DECISIONS.md` **D31**.
 | Command | Result |
 |---|---|
 | `forge build` | ok |
-| `forge test` | **197 passed, 0 failed** (107 other tests + 31 `AllowanceTransferTest` + 21 `RouterTest` (12 + 9 new B.1) + 28 `LimitOrdersTest` + 10 `AdminTest`, incl. the H-2 refund tests, the D28 deadline regression, the F.1 timelock/two-step tests and the B.1 deadline/bounds sweep) |
+| `forge test` | **204 passed, 0 failed** (107 other tests + 31 `AllowanceTransferTest` + 21 `RouterTest` (12 + 9 new B.1) + 28 `LimitOrdersTest` + 10 `AdminTest`, incl. the H-2 refund tests, the D28 deadline regression, the F.1 timelock/two-step tests and the B.1 deadline/bounds sweep, + 7 new `TwapGuardTest` (D33)) |
 | `forge test --match-contract AllowanceTransferTest --fuzz-runs 5000` | **31 passed, 0 failed**, 3 fuzz tests × 5000 runs |
 | `forge test --match-contract LimitOrdersTest --fuzz-runs 5000` | **28 passed, 0 failed**, 2 fuzz tests × 5000 runs |
 | `npx playwright test` (apps/web) | **1 passed** — browser-signed `PermitSingle`: lands, replay → `NonceAlreadyUsed`, wrong chain → `InvalidSignature`, extended `sigDeadline` → `InvalidSignature` |

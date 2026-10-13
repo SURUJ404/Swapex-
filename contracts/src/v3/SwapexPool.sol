@@ -114,7 +114,7 @@ contract SwapexPool {
         if (slot0.sqrtPriceX96 != 0) revert AlreadyInitialized();
         int24 tick = TickMath.getTickAtSqrtRatio(sqrtPriceX96);
         slot0 = Slot0({sqrtPriceX96: sqrtPriceX96, tick: tick, protocolFeeDenominator: 0, unlocked: true});
-        observations.initialize();
+        observations.initialize(uint32(block.timestamp));
         observationIndex = 0;
         observationCardinality = 1;
         observationCardinalityNext = 1;
