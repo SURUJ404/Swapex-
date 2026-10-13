@@ -21,3 +21,5 @@ Web app:
     cd apps/web
     npm ci
     npm run dev
+
+(See also the docs directory.)
