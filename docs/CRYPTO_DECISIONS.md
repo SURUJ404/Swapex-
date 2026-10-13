@@ -198,8 +198,9 @@ tests rather than re-derived in comments.
 | Command | Result |
 |---|---|
 | `forge build` | ok |
-| `forge test` | **147 passed, 0 failed** (115 pre-existing + 30 `AllowanceTransferTest` + 2 new `RouterTest`) |
-| `forge test --match-contract AllowanceTransferTest --fuzz-runs 5000` | **30 passed, 0 failed**, 3 fuzz tests × 5000 runs |
+| `forge test` | **150 passed, 0 failed** (115 pre-existing + 31 `AllowanceTransferTest` + 12 `RouterTest`, incl. the H-2 refund tests and the D28 deadline regression) |
+| `forge test --match-contract AllowanceTransferTest --fuzz-runs 5000` | **31 passed, 0 failed**, 3 fuzz tests × 5000 runs |
+| `npx playwright test` (apps/web) | **1 passed** — browser-signed `PermitSingle`: lands, replay → `NonceAlreadyUsed`, wrong chain → `InvalidSignature`, extended `sigDeadline` → `InvalidSignature` |
 | `.github/workflows/ci.yml` | installs `forge-std` + `OpenZeppelin/openzeppelin-contracts@v5.2.0 --no-git`, runs the suite and the 5000-run signature fuzz |
 
 ### Tooling note — `forge coverage` cannot instrument this codebase
@@ -217,5 +218,5 @@ diff** against `HEAD` — the failure predates this work). Five approaches were 
 The dead `[profile.coverage]` was removed rather than left in `foundry.toml` as misleading config.
 
 **Substitute evidence:** branch-by-branch mapping of every conditional in
-`AllowanceTransfer.sol` to the test that exercises it (all 30 in
+`AllowanceTransfer.sol` to the test that exercises it (all 31 in
 `contracts/test/v4/AllowanceTransfer.t.sol`), each confirmed green by the commands above.
