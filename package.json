@@ -2,6 +2,11 @@
   "name": "swapex",
   "version": "0.1.0",
   "private": true,
+  "dependencies": {
+    "next": "16.2.6",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
   "scripts": {
     "vercel-build": "cd apps/web && npm run build",
     "build": "cd apps/web && npm run build",
