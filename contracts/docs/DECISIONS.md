@@ -513,3 +513,51 @@ everything it runs (actions, toolchains, dependencies) can rewrite what ships.
 **Verification:** workflow YAML parses; SBOM parses (CycloneDX 1.5, 620 components, 621
 dependency edges); local double-build diff empty; full battery green (forge 204, fuzz x5000,
 npm test 22, lint 0 errors, build ok, e2e 1, both smokes PASS, manifest verify OK).
+
+## D35 - Merkle allowlist distributions (C)
+
+**Context:** C of the A-I list (allowlists / incentivized distributions). Threat-first: an
+allowlist decides who gets paid, so it must resist forged membership (second-preimage and
+proof forgery), duplicate claims, and silent root swaps; and the item's acceptance criteria
+demand a TypeScript generator plus a test proving forged proofs and duplicate claims fail.
+
+**Findings:**
+
+1. No allowlist feature existed yet (the hooks allowlist defers to E's code-hash registry), so
+   the scope decision was to build ONE distribution primitive now - tested, timelocked,
+   documented - instead of inventing an ad-hoc tree per future feature.
+2. A naive `keccak256(abi.encode(index, account, amount))` leaf is second-preimage-vulnerable:
+   any 32-byte internal tree node can be replayed as a "leaf" of the same tree class, because
+   nodes and leaves share a preimage length.
+3. The root is the security boundary: whoever can rotate it can redirect the entire payout,
+   so a root update must not be a single-key instant action.
+
+**Decision:**
+
+* `src/v4/periphery/MerkleDistributor.sol` - `claim(index, account, amount, proof)` verified by
+  OpenZeppelin `MerkleProof` v5.2 (its `commutativeKeccak256` = sorted-pair hashing; no
+  hand-rolled hash anywhere). Leaves are DOUBLE-hashed in one canonical place,
+  `leafOf = keccak256(bytes.concat(keccak256(abi.encode(...))))`, so an internal node can never
+  be reinterpreted as a claim leaf.
+* Claims tracked in a 256-per-word bitmap (`isClaimed`), marked BEFORE the transfer (CEI - a
+  reentrant token hits `AlreadyClaimed`); `claim` is permissionless but always pays the leaf's
+  `account` - a relayer can neither redirect nor inflate.
+* Root rotation: `setRoot` is `onlyOwner`, and deployments pass the `TimelockController` as
+  constructor owner (D29) - schedule, delay, cancel-during-delay, then execute; zero roots
+  rejected at construction and rotation.
+* Generator: `apps/web/scripts/merkle.ts`, TypeScript as the item requires, zero new
+  dependencies (hashing via the already-pinned ethers v5, `typescript` was already a devDep;
+  CLI = `npm run merkle` = tsc-compile + node, output committed to
+  `contracts/test/fixtures/merkle.json`). `foundry.toml` gains read-only `fs_permissions` for
+  `./test/fixtures` so the forge suite consumes the SAME artifact the generator wrote - that is
+  the cross-language proof: JS-built proofs must satisfy the audited Solidity verifier.
+
+**Verification:** +26 tests in `MerkleDistributor.t.sol` (JS-fixture claims, permissionless
+relay, duplicates, bitmap word boundary incl. index 256, tampered/empty/truncated/stale/cross
+proofs, single-hash tree rejection, double-hash-vs-internal-node disjointness, fuzzed forgery
+x5000, timelocked schedule/execute/cancel, constructor + input guards, reentrant token) =>
+`forge test` 230 passed; +8 tests in `apps/web/tests/merkle.test.ts` (independent fold verifier,
+tamper matrix, odd-tree carry, byte-for-byte fixture reproduction) => npm 30; Slither Phase 9:
+56 contracts, 82 results - ZERO referencing `MerkleDistributor`. Caught by inspection before
+commit: the generator's first draft dropped upper-level proof siblings for right-child leaves
+(member-set fix; the fixture-reproduction and fold tests now pin it).

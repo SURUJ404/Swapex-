@@ -8,8 +8,8 @@ Companion documents (detail lives there, this is the index):
 | Document | Contents |
 |---|---|
 | [`docs/CRYPTO_DECISIONS.md`](./CRYPTO_DECISIONS.md) | Threat-first decision log for each item (threat → primitive → rejected alternatives → assumptions → what breaks) |
-| [`contracts/docs/SECURITY.md`](../contracts/docs/SECURITY.md) | Slither 0.11.6 (8 phases) + Aderyn 0.6.8 paper trail: every finding fixed / accepted-with-reason / false-positive |
-| [`contracts/docs/DECISIONS.md`](../contracts/docs/DECISIONS.md) | D27 (signed per-spender allowances), D28 (`sigDeadline` is signed), D29 (two-step ownership + timelock), D30 (signed deployment manifests), D31 (Router deadlines + amount bounds), D32 (commit-reveal rejected), D33 (oracle read policy: creation-stamped bootstrap + `TwapGuard`), D34 (supply chain: SHA-pinned Actions, SBOM, double-build) |
+| [`contracts/docs/SECURITY.md`](../contracts/docs/SECURITY.md) | Slither 0.11.6 (9 phases) + Aderyn 0.6.8 paper trail: every finding fixed / accepted-with-reason / false-positive |
+| [`contracts/docs/DECISIONS.md`](../contracts/docs/DECISIONS.md) | D27 (signed per-spender allowances), D28 (`sigDeadline` is signed), D29 (two-step ownership + timelock), D30 (signed deployment manifests), D31 (Router deadlines + amount bounds), D32 (commit-reveal rejected), D33 (oracle read policy: creation-stamped bootstrap + `TwapGuard`), D34 (supply chain: SHA-pinned Actions, SBOM, double-build), D35 (Merkle allowlists: double-hashed leaves + timelocked root) |
 | [`docs/TESTNET_SECURITY.md`](./TESTNET_SECURITY.md) | Testnet-only posture, admin ownership (§3), dependency pinning, pre-mainnet checklist |
 | [`docs/MEV.md`](./MEV.md) | B.2/B.3: what commit-reveal does and does not stop (evaluated, rejected — D32) and the private-orderflow options |
 
@@ -68,6 +68,17 @@ Companion documents (detail lives there, this is the index):
     double-build gate proves two clean builds of one checkout are byte-identical (154/154
     locally); npm provenance + Sigstore signing documented as exact commands for when a real
     release exists (not exercisable without credentials — rule 6).
+12. **C — Merkle allowlist distributions** (D35): `MerkleDistributor.sol` verifies claims with
+    OZ `MerkleProof` (sorted-pair, audited — nothing hand-rolled), double-hashed leaves fixed
+    in `leafOf` (`keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))))`) so
+    an internal node can never be replayed as a claim; 256-per-word claimed bitmap set before
+    the transfer (CEI — a reentrant token fails with `AlreadyClaimed`), permissionless relay
+    that always pays the leaf's `account`; `setRoot` behind the `TimelockController`
+    (schedule → 2-day delay → execute, cancellable — tested). The TypeScript generator
+    (`apps/web/scripts/merkle.ts`, zero new deps — ethers v5 keccak + the already-present
+    `typescript` devDep) emits the committed fixture that the forge suite parses via
+    read-only `fs_permissions`, and `tests/merkle.test.ts` folds every proof with a third
+    independent implementation.
 
 ## What each piece protects against — and what it does not
 
@@ -80,6 +91,7 @@ Companion documents (detail lives there, this is the index):
 | B.1 deadlines + bounds | A pending tx executing later than the user allowed (stale/cross-block execution); a multi-hop swap executing with no output floor at all; a deposit paid at a manipulated price (amount0/1Max) or a removal landing below expectation (amount0/1Min); mempool observers *pre-positioning* around a known-priced tx (the floor reverts them out) | Same-block/validator MEV on the reveal itself (deadline ≠ privacy — see `docs/MEV.md`); a `minAmountOut == 0` opt-out the caller explicitly chose (documented; the UI always sends a real floor); price impact *within* the slippage tolerance the user set |
 | D oracle read policy (D33) | A value decision fed spot (the renamed `lastSwapSqrtPrice*` hook, or `slot0`) or a silently truncated / fake-epoch window as if it were a TWAP; a same-block slam-and-return moving a "TWAP"; short windows dominated by manipulation; pools that were never initialized being consulted | Manipulation *within* the window's weighting (inherent to TWAPs — dilution, not elimination: longer windows cost more to move); pools whose ring nobody grew far enough (consult refuses rather than guesses — grow `cardinalityNext`, it is permissionless); the quotes themselves (spot by design, settlement-bounded by D31) |
 | H supply chain (D34) | A re-pointed/malicious CI action tag running in a job that sees the repo and registry; a transitive dependency change invisible in review; a nondeterministic build that makes artifact-hash verification (F.2) meaningless | A compromised GitHub serving a malicious pinned commit; a malicious *already-pinned* dependency version (SBOM makes it auditable, not immune); releases signed before the documented provenance/attestation flow actually exists |
+| C Merkle allowlist (D35) | Forged membership (second-preimage: a tree node replayed as a claim leaf; a tampered index/account/amount/proof); duplicate/replayed claims including via a reentrant token; a compromised key silently rotating the payout root; generator-vs-chain convention drift | Whoever controls the *timelocked owner set* (they can rotate the root after the delay — that is governance, not an exploit); a tree published with wrong entries (garbage in, garbage out — eligibility is not a crypto question); DoS by a token that refuses `transfer` (claims revert, nothing is double-paid) |
 
 ## Findings and fixes (the part that matters)
 
@@ -94,6 +106,8 @@ Companion documents (detail lives there, this is the index):
 | **`Observations.initialize()` stamped the bootstrap at unix epoch 0**: on a live chain any window older than a young pool interpolated the init tick backwards to 1970 instead of truncating at creation (D7's intent) — a silent wrong value invisible to tests that genesis at `vm.warp(0)` | Self-review while writing D33 | **Fixed** — `initialize(time)` stamps `uint32(block.timestamp)`; regression `test_bootstrapStampedWithCreationTime` pins `observeSingle` → 0 (pre-fix: `6000 * 998300`) |
 | **`OracleHook` claimed a "TWAP-style feed"** while storing only the latest post-swap spot price — one swap moves it | Self-review while writing D33 | **Fixed** — renamed `lastSwapSqrtPriceAtPoolId`/`lastSwapSqrtPrice`, header states spot-only and points at `TwapGuard`; the resistant path is pinned by `test_consult_sameBlockSpotSlamDoesNotMoveGuardedTwap` |
 | +4 Slither instances in the Phase 8 run, all inside `TwapGuard.consult` (3× `unused-return` on partially-destructured view reads, 1× `timestamp` on the window comparisons) | Slither 0.11.6 re-run (53 contracts, 82 results filtered) | Accepted with reasons in `SECURITY.md` Phase 8 — the discarded return components are unused by design, and oracle window semantics require `block.timestamp` (same rulings as Phases 5/7) |
+| **`merkle.ts` first draft dropped upper-level proof siblings for right-child leaves**: the merged layer node tracked only the left child's position, so claims 1 and 256 folded one level short and could never verify (`verifyProof` would fail for half the tree) | Self-review while writing D35 — before any test ran | **Fixed** — layer nodes now carry the full member set; pinned by three tests (`proof lengths [2,2,2,2]`, independent fold for every claim, byte-for-byte fixture reproduction) in `tests/merkle.test.ts` |
+| 0 new Slither findings in the Phase 9 run — `MerkleDistributor`/`ReenterClaimToken` flagged by no detector (result count unchanged at 82 while contracts grew 53 → 56) | Slither 0.11.6 re-run (56 contracts, 82 results filtered) | Clean for the new code; entry in `SECURITY.md` Phase 9 |
 | 18 Aderyn Lows (admin-only centrality, bounded loops, Uniswap-literal constants, struct shadowing, PUSH0/cancun, `isNonceUsed`/`hashPermitSingle` as external API, …) | Aderyn 0.6.8 | Grouped triage table in `SECURITY.md` |
 
 ## Verification (run on this repository)
@@ -101,14 +115,16 @@ Companion documents (detail lives there, this is the index):
 | Command | Result |
 |---|---|
 | `forge build` | ok |
-| `forge test` | **204 passed, 0 failed** (197 + 7 new `TwapGuardTest` oracle-policy tests) |
+| `forge test` | **230 passed, 0 failed** (204 + 26 new `MerkleDistributorTest` — JS-fixture claims, duplicates, bitmap word boundary, forged-proof matrix, timelocked rotation incl. cancel, reentrant token) |
 | `forge test --fuzz-runs 5000 --match-contract 'AllowanceTransferTest\|LimitOrdersTest'` | **31 + 28 passed, 0 failed** (signature code × 5000 runs; LimitOrders now settles through the deadline+bound Router) |
+| `forge test --fuzz-runs 5000 --match-contract MerkleDistributorTest` | **26 passed, 0 failed** (forged-claim fuzz × 5000: random `(index, account, amount)` never validates) |
 | `forge script` broadcast (via `deploy.mjs --broadcast`) | rotation #6 on anvil (B.1 ABI break required redeploy); signed manifest refreshed |
 | `node scripts/verify-manifest.mjs 31337 --rpc http://127.0.0.1:8545` | all PASS — EIP-191 signature, commit ancestry, settings match, on-chain codehash rows; tampered manifest → FAIL (exit 1) |
 | `npx playwright test` (apps/web, `npm run test:e2e`) | **1 passed** — sign → cross-verify → land → replay `NonceAlreadyUsed` → wrong-chain `InvalidSignature` → extended-deadline `InvalidSignature` |
 | `node scripts/smoke.mjs` | PASS (quote + native swap + token swap) on rotation #6, with `deadline` arg on both swaps |
 | `node scripts/smokeLiquidity.mjs` | PASS (add with `amountMax` bounds + remove with `amountMin` bounds) on rotation #6 |
-| `npm test` (apps/web) | 22 passed |
+| `npm test` (apps/web) | 30 passed (22 + 8 new `tests/merkle.test.ts` — leaf/pair conventions, independent fold, tamper matrix, odd-tree carry, fixture reproduction) |
+| `npm run merkle -- ../../contracts/test/fixtures/allowlist.json ../../contracts/test/fixtures/merkle.json` (apps/web) | regenerates the committed fixture: root `0xdb3e3af9…c15`, 4 entries; forge suite parses the same file via `fs_permissions` (read-only) |
 | `npm run lint` | 0 errors (18 pre-existing warnings) |
 | `npm run build` | compiled, all routes prerendered |
 | `npm sbom --sbom-format cyclonedx --sbom-type application` (apps/web) | CycloneDX 1.5, **620 components / 621 edges** — committed baseline `sbom.cdx.json`; CI regenerates + uploads as `web-sbom` |
@@ -117,8 +133,10 @@ Companion documents (detail lives there, this is the index):
 
 **Coverage substitute:** `forge coverage` cannot instrument this codebase (5 approaches fail on
 `PoolManager.sol`, which has zero diff against `HEAD` — details in `CRYPTO_DECISIONS.md`).
-Substitute evidence: every conditional in `AllowanceTransfer.sol` and `LimitOrders.sol` mapped to
-the test that exercises it, all green above.
+Substitute evidence: every conditional in `AllowanceTransfer.sol`, `LimitOrders.sol` and
+`MerkleDistributor.sol` mapped to the test that exercises it (constructor guards, zero
+account/amount, bitmap words 0 and 1, every `InvalidProof`/`AlreadyClaimed` revert path, both
+`setRoot` guards, the timelock schedule/execute/cancel legs), all green above.
 
 ## Open risks
 
@@ -147,15 +165,19 @@ the test that exercises it, all green above.
 5. Cross-chain replay posture: EIP-712 domains (chainId + verifyingContract) on both signed types.
 6. `TwapGuard.consult` + the `Observations` bootstrap stamp (D33): the oldest-ring index math,
    the coverage check, and the pre-creation truncation regression in `TwapGuard.t.sol`.
+7. `MerkleDistributor.claim` (D35): CEI ordering around `safeTransfer`, `leafOf`'s double
+   hash vs OZ `MerkleProof`'s commutative fold, the bitmap word math, and the
+   schedule/execute/cancel timelock test — plus the three-way fixture agreement (generator
+   output, independent JS fold, Solidity verifier).
 
 ## Not done, on purpose or deferred
 
-* **Items A, B, D, F and H of the original A–I hardening list are complete** (A.1–A.3, B.1–B.3
-  with B.2 rejected-with-analysis per D32, D33 oracle read policy, F.1–F.3, H supply chain per
-  D34; each with CRYPTO_DECISIONS/DECISIONS entries and verified-by notes above). **Remaining:
-  C (Merkle allowlists — only if a feature needs one), E (hook-address permission tests +
-  verified-hook registry), G (web: typed data everywhere, EIP-55 validation, SRI/CSP
-  tightening), I (advanced crypto — proposal first).**
+* **Items A, B, C, D, F and H of the original A–I hardening list are complete** (A.1–A.3, B.1–B.3
+  with B.2 rejected-with-analysis per D32, C Merkle allowlists per D35, D33 oracle read policy,
+  F.1–F.3, H supply chain per D34; each with CRYPTO_DECISIONS/DECISIONS entries and verified-by
+  notes above). **Remaining: E (hook-address permission tests + verified-hook registry), G (web:
+  typed data everywhere, EIP-55 validation, SRI/CSP tightening), I (advanced crypto — proposal
+  first).**
 * **No primitives written by hand, no new dependencies added**: OZ v5.2.0 (pinned), ethers v5,
   Playwright for the browser test.
 * **Nothing mainnet-shaped**: anvil chain 31337 only, public dev keys only, no secrets in the

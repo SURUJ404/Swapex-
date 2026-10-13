@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "merkle": "tsc scripts/merkle.ts --outDir scripts/.merkle-build --module commonjs --target es2022 --esModuleInterop --skipLibCheck && node scripts/.merkle-build/merkle.js",
     "test:e2e": "playwright test"
   },
   "dependencies": {

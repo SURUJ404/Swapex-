@@ -1,0 +1,42 @@
+{
+  "root": "0xdb3e3af95d62d9f49fc261fed4896d80a6da3cf3020eed51763df35ac1ec9c15",
+  "count": 4,
+  "claims": [
+    {
+      "index": 0,
+      "account": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      "amount": "1000000000000000000",
+      "proof": [
+        "0x7da38b9ab9840edddc0701b667b4fe13efe7b15ab475cffb431a6bc3104942e5",
+        "0x7da5bdd531c532eaff0836f1696cccd0514a9e55800ea15c05ac81e43d85ec92"
+      ]
+    },
+    {
+      "index": 1,
+      "account": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "amount": "2000000000000000000",
+      "proof": [
+        "0x1b0aa3d12e9bb62aa994256d1602722d77240ca5d6a0db897bf6dc6312011d05",
+        "0x7da5bdd531c532eaff0836f1696cccd0514a9e55800ea15c05ac81e43d85ec92"
+      ]
+    },
+    {
+      "index": 2,
+      "account": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "amount": "3000000000000000000",
+      "proof": [
+        "0xfcddd8c1b72aa86edee4082e12c6d567c088c8743a53dfec2aff6e041f690e42",
+        "0x8184986ac470c1c2018a5db9070a176e917e1f68ff562073c632edb137d0154d"
+      ]
+    },
+    {
+      "index": 256,
+      "account": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "amount": "4000000000000000000",
+      "proof": [
+        "0xcb12adbaaca4203fb2858a095905db4d02038775b96749caec6a12fe7ab918e1",
+        "0x8184986ac470c1c2018a5db9070a176e917e1f68ff562073c632edb137d0154d"
+      ]
+    }
+  ]
+}

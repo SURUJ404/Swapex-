@@ -13,6 +13,9 @@ cbor_metadata = false
 evm_version = "cancun"
 via_ir = true                 # swap() has many locals; IR pipeline avoids "stack too deep"
 
+# C: forge tests read the JS-generated Merkle fixture (apps/web/scripts/merkle.ts output)
+fs_permissions = [{ access = "read", path = "./test/fixtures" }]
+
 [profile.default.fuzz]
 runs = 512
 

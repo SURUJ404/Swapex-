@@ -40,6 +40,7 @@ devserver.log
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+apps/web/scripts/.merkle-build/
 
 # contracts (Foundry)
 contracts/lib/

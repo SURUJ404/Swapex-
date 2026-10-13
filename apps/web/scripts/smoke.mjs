@@ -44,9 +44,12 @@ const swb = new ethers.Contract(SWB, abi('ERC20'), provider)
 
 console.log(`signer ${wallet.address} on ${(await provider.getNetwork()).chainId}`)
 
-// B.1: every Router entry now takes a tx deadline (absolute unix seconds). Use chain time so a
-// skewed local clock can't make the tx dead on arrival.
-const DEADLINE = (await provider.getBlock('latest')).timestamp + 1200
+// B.1: every Router entry now takes a tx deadline (absolute unix seconds). Anchor to
+// max(chain time, wall clock) + buffer: an idle local anvil only stamps blocks when it
+// mines, so the latest block can lag wall by minutes and the NEXT block gets a wall-clock
+// timestamp -- a chain-only deadline then expires on arrival (TransactionTooOld). Same fix
+// as e2e/permit-typed-data.spec.js.
+const DEADLINE = Math.max((await provider.getBlock('latest')).timestamp, Math.floor(Date.now() / 1000)) + 1200
 
 // ---------------------------------------------------------------- native (ETH) -> SWA
 {
@@ -87,7 +90,8 @@ const DEADLINE = (await provider.getBlock('latest')).timestamp + 1200
     await (await swa.approve(AT, ethers.constants.MaxUint256)).wait()
   }
   const block1 = await provider.getBlock('latest')
-  await (await at.setAllowance(SWA, ROUTER, amountIn, block1.timestamp + 3600)).wait()
+  const expiry = Math.max(block1.timestamp, Math.floor(Date.now() / 1000)) + 3600
+  await (await at.setAllowance(SWA, ROUTER, amountIn, expiry)).wait()
   const before = await swb.balanceOf(wallet.address)
   const minOut = quotedOut.mul(995).div(1000)
   const tx = await router.exactInputSingle(k, sp, wallet.address, minOut, DEADLINE)

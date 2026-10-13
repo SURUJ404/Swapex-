@@ -51,8 +51,10 @@ const owed = fullRangeAmountsForLiquidity(sqrtP, TICK_SPACING, liquidity)
 ok(owed.amount0.lte(amount0) && owed.amount1.lte(amount1), `lib amounts within intended deposit`)
 
 const swaBefore = await swa.balanceOf(wallet.address)
-// B.1: tx deadline for every Router entry (chain time, +20 minutes).
-const DEADLINE = (await provider.getBlock('latest')).timestamp + 1200
+// B.1: tx deadline for every Router entry. max(chain time, wall clock) + 20 minutes: an idle
+// anvil lags wall time and stamps the next block at wall time, so a chain-only deadline can
+// be expired on arrival (TransactionTooOld) -- same fix as e2e/permit-typed-data.spec.js.
+const DEADLINE = Math.max((await provider.getBlock('latest')).timestamp, Math.floor(Date.now() / 1000)) + 1200
 // two-grant model: ERC-20 allowance to the AllowanceTransfer (once), then a bounded,
 // expiring grant from it to the Router -- exactly what hooks/useApprove.js does in the app.
 const at = new ethers.Contract(AT, abi('AllowanceTransfer'), wallet)
@@ -60,7 +62,8 @@ if ((await swa.allowance(wallet.address, AT)).lt(amount1)) {
   await (await swa.approve(AT, ethers.constants.MaxUint256)).wait()
 }
 const block1 = await provider.getBlock('latest')
-await (await at.setAllowance(SWA, ROUTER, amount1, block1.timestamp + 3600)).wait()
+const expiry = Math.max(block1.timestamp, Math.floor(Date.now() / 1000)) + 3600
+await (await at.setAllowance(SWA, ROUTER, amount1, expiry)).wait()
 
 const tx = await router.modifyLiquidity(
   key,

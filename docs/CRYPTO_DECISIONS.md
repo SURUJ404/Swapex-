@@ -460,6 +460,105 @@ trusted set** — regenerated and uploaded by CI on every run; (c) a CI double-b
 
 ---
 
+## C - Merkle allowlist distributions (`MerkleDistributor` + TypeScript generator)
+
+### Threat
+
+1. **Second-preimage forgery.** In a naive tree, leaves are `keccak256(abi.encode(index,
+   account, amount))` - a single hash of 96 bytes. Internal nodes are a single hash of 64
+   bytes... but nothing stops a node of one tree from being *presented* as membership of a
+   class where it preimage-collides with a leaf encoding: with both sides hashed exactly once,
+   a 32-byte internal node and a 32-byte leaf are indistinguishable by construction. A crafted
+   entry whose leaf equals an internal node pays out "as the tree itself".
+2. **Forged proofs.** Hand-rolled verification (own hashing, own pairing order, own fold) is
+   where audit-bypass bugs live; a wrong pairing convention silently rejects valid claims or -
+   worse - accepts a sibling list that does not fold to the committed root.
+3. **Duplicate claims.** A claim that is not recorded can be replayed until the pot drains;
+   a record that can be rolled back by a reentrant token can be double-paid.
+4. **Silent root swap.** The root *is* the payout policy. A single compromised key rotating it
+   redirects every remaining claim with no delay for review or cancellation.
+5. **Generator/chain drift.** The tree is built off-chain; if the JS artifact and the Solidity
+   verifier disagree about leaf encoding, pairing order, or tree shape, one side's "valid" is
+   the other side's forgery - or claims are simply unclaimable with no diagnostic.
+
+### Primitive / decision
+
+* `contracts/src/v4/periphery/MerkleDistributor.sol`, verification delegated entirely to
+  OpenZeppelin `MerkleProof` v5.2 (audited, sorted-pair `commutativeKeccak256` - the standard
+  tooling convention; no primitive written by hand). Leaf encoding is fixed in one place,
+  `leafOf(index, account, amount) = keccak256(bytes.concat(keccak256(abi.encode(...))))` -
+  double-hashed per the item, so an internal node (32 raw bytes) can never equal a leaf
+  (hash of 32 bytes). `claim` re-derives the leaf from its arguments, so a proof valid for one
+  entry cannot pay another.
+* Duplicate-claim defense: 256-per-word claimed bitmap keyed by `index`, set **before** the
+  token transfer (checks-effects-interactions); a second `claim` for a used index reverts
+  `AlreadyClaimed(index)` even mid-reentry. The test proves this with a token that re-enters
+  during `transfer` and must fail (`reentrySuccesses == 0`).
+* Root-update timelock: `setRoot` is `onlyOwner`; deployments construct with the
+  OZ `TimelockController` as owner (D29) - updates are schedule -> 2-day delay -> execute,
+  cancellable throughout the delay (tested end-to-end including the cancel path).
+  `claim` is permissionless: anyone may relay, funds always go to the leaf's `account`.
+* Generator: `apps/web/scripts/merkle.ts` (TypeScript as specified) - zero new dependencies,
+  keccak via the pinned ethers v5, built-in `typescript` devDep compiles the CLI
+  (`npm run merkle`). Output committed at `contracts/test/fixtures/merkle.json`; `foundry.toml`
+  grants read-only `fs_permissions` on `./test/fixtures`, and the forge suite parses the SAME
+  file: JS-built roots/proofs must satisfy the Solidity verifier, `tests/merkle.test.ts` folds
+  them with a third, independent implementation - three-way cross-check. Full rationale in
+  `contracts/docs/DECISIONS.md` **D35**.
+
+### Rejected alternatives
+
+* *Hand-rolled Merkle verify in Solidity (sorted-pair fold).* Rule 1: never write the
+  primitive. `MerkleProof.verify` is audited, ubiquitous, and its commutative hashing IS the
+  convention the generator matches - nothing to prove about correctness.
+* *Third-party JS Merkle library (e.g. merkletreejs / OZ's `StandardMerkleTree`).* Adds a
+  dependency for ~60 lines of tree-shaping code whose output is anyway verified by the audited
+  Solidity side and double-checked by an independent fold test; OZ's JS tooling would also
+  change the leaf ABI shape (typed arrays vs `abi.encode`) away from the item's exact wording.
+  The hand-written builder is the *untrusted* half of the cross-check - by design.
+* *Allowlist check inside `claim` per feature, without a distributor.* Re-implements the same
+  question (is this account a member?) at every call site, with whatever hashing each site
+  picks - the drift threat, multiplied.
+* *Signature-per-claim (signed vouchers instead of a tree).* N signatures to distribute N
+  payouts vs one root + N cheap proofs; signers' key material exists for the whole campaign
+  instead of once at tree-published time; and it reintroduces nonce/deadline bookkeeping the
+  item deliberately routes through a Merkle commitment. Revisit only if claims are retroactive
+  (tree must be committed before eligibility is known).
+* *Bitmap as a mapping `index => bool`.* Functionally identical, costs 20k gas/slot vs ~2k
+  for the bitmap word; the bitmap is the OZ ERC20Permit pattern already familiar to reviewers.
+* *Non-zero `msg.sender` binding (only the account itself may claim).* Blocks the useful
+  relayer/gasless flow; unnecessary because `account` is inside the leaf - the relayer gains
+  nothing by relaying.
+
+### Assumptions
+
+* The tree generator runs on the user's machine (or CI) at tree-publication time; the fixture
+  committed here is test data - a real campaign would regenerate from its own allowlist input
+  with the same `npm run merkle` and publish the root on-chain via the timelock.
+* Sorted-pair (`a < b` byte order) hashing matches OZ v5's `Hashes.commutativeKeccak256`
+  exactly - asserted by the generator tests and by every forge claim succeeding against
+  JS-built proofs.
+* `index` uniqueness within a tree is the generator's responsibility (two entries at one
+  index would share a bitmap slot); the committed input uses 0,1,2,256 and the forge suite
+  pins that layout.
+* The distributor's token balance is funded once (mint/transfer); no `withdraw` exists for a
+  leftover balance - if that becomes needed it belongs behind the same timelocked owner (or
+  should be a re-root to an empty tree + sweep), not a new hot path.
+
+### What breaks
+
+* A tree built with a *different* leaf convention or pairing order than `merkle.ts` will be
+  rejected (`InvalidProof`) for every entry - fail-closed, but claims freeze; the fixture
+  cross-check exists so this cannot ship silently.
+* Re-`npm run merkle` after editing `allowlist.json` changes the committed fixture; the forge
+  suite consumes it, so an un-regenerated or hand-edited fixture fails immediately.
+* Root rotation with claims outstanding invalidates not-yet-claimed proofs (by design - that
+  is what a revocable allowlist means); already-claimed slots stay claimed across rotations
+  (the bitmap is independent of the root).
+* `setRoot` from a non-owner (including a direct EOA call once the owner is the timelock)
+  reverts `OwnableUnauthorizedAccount`; `claim` on a zero-amount/zero-account leaf reverts
+  even if such an entry were committed (`ZeroAmount` / `ZeroAccount`).
+
 ## Verification (commands + results, run on this repository)
 
 | Command | Result |
