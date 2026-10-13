@@ -13,9 +13,9 @@ const abi = (name) => JSON.parse(readFileSync(join(__dirname, '..', 'constants',
 
 const RPC = process.env.RPC_URL || 'http://127.0.0.1:8545'
 const PK = process.env.PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
-const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x1c85638e118b37167e9298c2268758e058DdfDA0'
-const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x367761085BF3C12e5DA2Df99AC6E1a824612b8fb'
-const SWA = process.env.NEXT_PUBLIC_SWA || '0x7A9Ec1d04904907De0ED7b6839CcdD59c3716AC9'
+const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x3aAde2dCD2Df6a8cAc689EE797591b2913658659'
+const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0xab16A69A5a8c12C732e0DEFF4BE56A70bb64c926'
+const SWA = process.env.NEXT_PUBLIC_SWA || '0x1f10F3Ba7ACB61b2F50B9d6DdCf91a6f787C0E82'
 const ZERO = '0x0000000000000000000000000000000000000000'
 const TICK_SPACING = 60
 
@@ -27,7 +27,7 @@ function ok(cond, msg) {
 const provider = new ethers.providers.JsonRpcProvider(RPC)
 const wallet = new ethers.Wallet(PK, provider)
 const router = new ethers.Contract(ROUTER, abi('Router'), wallet)
-const pm = new ethers.Contract(process.env.NEXT_PUBLIC_POOL_MANAGER || '0xC9a43158891282A2B1475592D5719c001986Aaec', abi('PoolManager'), provider)
+const pm = new ethers.Contract(process.env.NEXT_PUBLIC_POOL_MANAGER || '0xffa7CA1AEEEbBc30C874d32C7e22F052BbEa0429', abi('PoolManager'), provider)
 const swa = new ethers.Contract(SWA, abi('ERC20'), wallet)
 
 // native (address 0) sorts first -> currency0 = native, currency1 = SWA

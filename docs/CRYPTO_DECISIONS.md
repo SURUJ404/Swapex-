@@ -56,11 +56,19 @@ submits it. The grant is **bounded** (`uint160` amount, `uint48` expiration) and
 
 | Function | Auth | Notes |
 |---|---|---|
-| `permit(owner, PermitSingle, sig, sigDeadline)` | off-chain sig | verified with `SignatureChecker` |
+| `permit(owner, PermitSingle, sig)` | off-chain sig | `sigDeadline` is a *signed* field of `PermitSingle` (see correction below); verified with `SignatureChecker` |
 | `setAllowance(token, spender, amount, expiration)` | `msg.sender` | the *same* grant with no signature at all |
-| `invalidateNonce(spender, wordPos, mask)` | `msg.sender` | burn nonces proactively |
+| `invalidateNonce(nonce)` | `msg.sender` | burn one of your own nonces proactively |
 | `transferFrom(from, to, amount, token)` | `msg.sender` must be the grant's spender | skips the decrement at `type(uint160).max` |
 | `permitERC20(owner, token, spender, value, deadline, v, r, s)` | EIP-2612 passthrough | `try/catch`, reverts `TokenDoesNotSupportPermit` |
+
+**Correction (2026-10-13):** A.1 originally shipped `sigDeadline` as a `permit()` *parameter*
+outside the typed struct — the signature did not cover it, so a submitter could pass
+`type(uint256).max` and ignore the bound the signer chose, breaking this document's own deadline
+rule for signed messages. The field now lives inside `PermitSingle` (and its typehash),
+`permit()` takes three arguments, and both directions are pinned by tests: a past *signed*
+deadline reverts `SignatureExpired`, a *submitter-extended* deadline reverts `InvalidSignature`
+(digest changed). See D28 in `contracts/docs/DECISIONS.md`.
 
 **Rejected alternatives:**
 

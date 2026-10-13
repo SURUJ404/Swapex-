@@ -328,13 +328,14 @@ contract RouterTest is Test {
                 expiration: uint48(block.timestamp + 1 days),
                 nonce: 0
             }),
-            spender: address(router)
+            spender: address(router),
+            sigDeadline: block.timestamp + 1 hours
         });
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, at.hashPermitSingle(p));
         bytes memory sig = abi.encodePacked(r, s, v);
 
         // a relayer front-runs the signed grant -- submitting it is permissionless.
-        at.permit(alice, p, sig, block.timestamp + 1 hours);
+        at.permit(alice, p, sig);
         (uint160 granted,) = at.allowanceOf(alice, currency.unwrap(input), address(router));
         assertEq(uint256(granted), 1e18, "front-run established the router's allowance");
 
@@ -342,7 +343,7 @@ contract RouterTest is Test {
         // allowance the front-run already created instead of dying on a replay of the grant.
         uint256 outBefore = MockERC20(output).balanceOf(alice);
         vm.prank(alice);
-        router.exactInputSingleWithPermit(key, sp, alice, 0, p, sig, block.timestamp + 1 hours);
+        router.exactInputSingleWithPermit(key, sp, alice, 0, p, sig);
 
         assertGt(MockERC20(output).balanceOf(alice), outBefore, "swap settled despite the front-run");
     }
@@ -378,13 +379,14 @@ contract RouterTest is Test {
                 expiration: uint48(block.timestamp + 1 days),
                 nonce: 0
             }),
-            spender: makeAddr("someoneElse")
+            spender: makeAddr("someoneElse"),
+            sigDeadline: block.timestamp + 1 hours
         });
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, at.hashPermitSingle(p));
         bytes memory sig = abi.encodePacked(r, s, v);
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Router.InvalidPermitSpender.selector, address(router), p.spender));
-        router.exactInputSingleWithPermit(key, sp, alice, 0, p, sig, block.timestamp + 1 hours);
+        router.exactInputSingleWithPermit(key, sp, alice, 0, p, sig);
     }
 }

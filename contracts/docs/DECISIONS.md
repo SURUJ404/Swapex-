@@ -259,7 +259,8 @@ beneficiary) is future work. For the single-provider local demo this is sufficie
 **Decision:** New `src/v4/periphery/AllowanceTransfer.sol` (EIP-712 domain "Swapex AllowanceTransfer"
 v1) holds per-`(owner, token, spender)` grants as `PermitDetails{uint160 amount, uint48 expiration,
 uint48 nonce}` with a 256-bit nonce bitmap. Grants are established two ways — off-chain via
-`permit(owner, PermitSingle, sig, sigDeadline)` or on-chain with no signature at all via
+`permit(owner, PermitSingle, sig)` (the `PermitSingle` struct carries `details`, `spender` **and
+`sigDeadline`**; see D28) or on-chain with no signature at all via
 `setAllowance(...)` — and spent by `transferFrom`, which only the named spender may call.
 `Router` now takes the `AllowanceTransfer` as a constructor dependency and settles through
 `at.transferFrom(_payer, address(this), …)` instead of reading a raw ERC-20 allowance; it also gains
@@ -283,3 +284,20 @@ Router shifts every subsequent `CREATE` address in `Deploy.s.sol` — the explic
 AllowanceTransfer()` was kept over a self-deploying Router so the dependency stays visible and
 injectable, and the recorded addresses in the web app and smoke scripts were updated to match.
 Full threat model, rejected alternatives and what breaks: `docs/CRYPTO_DECISIONS.md` (A.1, A.2).
+
+## D28 — `sigDeadline` is part of the *signed* `PermitSingle`, not a bare `permit()` argument
+**Decision:** `PermitSingle` now carries `uint256 sigDeadline` as a struct field,
+`PERMIT_SINGLE_TYPEHASH` covers it, and `permit(owner, permitSingle, signature)` takes three
+arguments (`exactInputSingleWithPermit` no longer threads a separate deadline either).
+**Rationale:** The A.1 implementation accepted `sigDeadline` as an *unsigned* function parameter
+while the EIP-712 digest covered only `{details, spender}`. The submitter therefore controlled the
+very bound that was supposed to limit *when the signature could be submitted* — passing
+`type(uint256).max` silently voided the signer's deadline, so the documented "replay window bound"
+was advisory only. (Replay itself was already blocked by the nonce bitmap and the signed
+`expiration` still capped the resulting allowance, but the property the interface promised was not
+enforced, violating the deadline rule in `docs/CRYPTO_DECISIONS.md`.) Permit2 signs this field;
+so do we now. The struct change shifts CREATE addresses again, so the local deployment and the
+recorded web addresses were rotated once more. Tests:
+`test_permit_expiredSignatureDeadline_reverts` (past signed deadline → `SignatureExpired`) and
+`test_permit_submitterCannotExtendTheSignedDeadline_reverts` (deadline extended by the submitter →
+`InvalidSignature`, because the digest changed).

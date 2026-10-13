@@ -104,8 +104,7 @@ contract Router is IUnlockCallback {
         address recipient,
         uint256 minAmountOut,
         AllowanceTransfer.PermitSingle memory permitSingle,
-        bytes calldata sig,
-        uint256 sigDeadline
+        bytes calldata sig
     ) external payable returns (BalanceDelta) {
         if (permitSingle.spender != address(this)) {
             revert InvalidPermitSpender(address(this), permitSingle.spender);
@@ -113,7 +112,7 @@ contract Router is IUnlockCallback {
         // a native input is paid from msg.value and needs no grant, so don't burn a nonce on it.
         currency input = sp.zeroForOne ? key.currency0 : key.currency1;
         if (!isNative(input) && !at.isNonceUsed(msg.sender, permitSingle.details.nonce)) {
-            at.permit(msg.sender, permitSingle, sig, sigDeadline);
+            at.permit(msg.sender, permitSingle, sig);
         }
 
         _payer = msg.sender;

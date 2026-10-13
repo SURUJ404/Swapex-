@@ -40,6 +40,10 @@ contract AllowanceTransfer is EIP712 {
     struct PermitSingle {
         PermitDetails details;
         address spender;
+        /// @dev latest time the signature may be submitted on-chain. Inside the struct (and the
+        ///      typehash), so a submitter cannot extend it — an unsigned parameter would let the
+        ///      submitter pass type(uint256).max and ignore the bound the signer chose.
+        uint256 sigDeadline;
     }
 
     // ------------------------------------------------------------------ state
@@ -60,7 +64,7 @@ contract AllowanceTransfer is EIP712 {
         keccak256("PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)");
 
     bytes32 public constant PERMIT_SINGLE_TYPEHASH = keccak256(
-        "PermitSingle(PermitDetails details,address spender)"
+        "PermitSingle(PermitDetails details,address spender,uint256 sigDeadline)"
         "PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)"
     );
 
@@ -93,14 +97,10 @@ contract AllowanceTransfer is EIP712 {
     ///         by `owner`'s EIP-712 signature. Anyone may submit this (relayers welcome); only the
     ///         signature binds it to `owner`.
     /// @param owner      the token holder granting the allowance (must be the signer / ERC-1271 wallet)
-    /// @param sigDeadline latest time this signature may be submitted on-chain (replay window bound)
-    function permit(
-        address owner,
-        PermitSingle memory permitSingle,
-        bytes calldata signature,
-        uint256 sigDeadline
-    ) external {
-        if (block.timestamp > sigDeadline) revert SignatureExpired(sigDeadline);
+    /// @param permitSingle the grant; `permitSingle.sigDeadline` is the latest time it may be
+    ///                     submitted on-chain and is covered by the signature
+    function permit(address owner, PermitSingle memory permitSingle, bytes calldata signature) external {
+        if (block.timestamp > permitSingle.sigDeadline) revert SignatureExpired(permitSingle.sigDeadline);
 
         PermitDetails memory d = permitSingle.details;
         // a grant that is already expired is useless and almost certainly a client bug
@@ -204,7 +204,7 @@ contract AllowanceTransfer is EIP712 {
         bytes32 detailsHash = keccak256(
             abi.encode(PERMIT_DETAILS_TYPEHASH, p.details.token, p.details.amount, p.details.expiration, p.details.nonce)
         );
-        return keccak256(abi.encode(PERMIT_SINGLE_TYPEHASH, detailsHash, p.spender));
+        return keccak256(abi.encode(PERMIT_SINGLE_TYPEHASH, detailsHash, p.spender, p.sigDeadline));
     }
 
     /// @dev set the bit for `nonce` in `owner`'s bitmap, reverting if it is already set.

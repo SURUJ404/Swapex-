@@ -67,7 +67,8 @@ contract AllowanceTransferTest is Test {
                 expiration: expiration,
                 nonce: nonce
             }),
-            spender: spender
+            spender: spender,
+            sigDeadline: _deadline()
         });
     }
 
@@ -117,7 +118,7 @@ contract AllowanceTransferTest is Test {
         AllowanceTransfer.PermitSingle memory p = _permit(7);
         (uint8 v, bytes32 r, bytes32 s) = _sign(ALICE_PK, at.hashPermitSingle(p));
 
-        at.permit(alice, p, _lowS(v, r, s), _deadline());
+        at.permit(alice, p, _lowS(v, r, s));
 
         (uint160 amount, uint48 expiration) = at.allowanceOf(alice, address(token), spender);
         assertEq(uint256(amount), 100e18, "signed amount applied");
@@ -145,11 +146,11 @@ contract AllowanceTransferTest is Test {
         // hand-rolling (r, vs) unpacking inside our own signature path, and every mainstream client
         // (ethers, viem) emits 65 bytes. Recorded in docs/CRYPTO_DECISIONS.md.
         _expectInvalid(alice);
-        at.permit(alice, p, compact64, _deadline());
+        at.permit(alice, p, compact64);
 
         // the identical signer + digest in the canonical encoding succeeds, so the rejection above
         // is about the encoding only -- not the signer, the domain or the grant.
-        at.permit(alice, p, canonical65, _deadline());
+        at.permit(alice, p, canonical65);
         (uint160 amount,) = at.allowanceOf(alice, address(token), spender);
         assertEq(uint256(amount), 100e18, "65-byte form accepted");
     }
@@ -172,19 +173,19 @@ contract AllowanceTransferTest is Test {
         // mallory signs, but alice is named as the owner: must not apply.
         (uint8 v, bytes32 r, bytes32 s) = _sign(MALLORY_PK, at.hashPermitSingle(p));
         _expectInvalid(alice);
-        at.permit(alice, p, _lowS(v, r, s), _deadline());
+        at.permit(alice, p, _lowS(v, r, s));
     }
 
     function test_permit_replayedSignature_reverts() public {
         AllowanceTransfer.PermitSingle memory p = _permit(0);
         bytes memory sig = _sigLow(ALICE_PK, at.hashPermitSingle(p));
 
-        at.permit(alice, p, sig, _deadline());
+        at.permit(alice, p, sig);
 
         // the signature itself is still perfectly valid — only the nonce is spent. This is what
         // makes a front-run harmless: the grant it created is already in place.
         vm.expectRevert(abi.encodeWithSelector(AllowanceTransfer.NonceAlreadyUsed.selector, alice, uint48(0)));
-        at.permit(alice, p, sig, _deadline());
+        at.permit(alice, p, sig);
     }
 
     function test_permit_tamperedNonce_reverts() public {
@@ -195,7 +196,7 @@ contract AllowanceTransferTest is Test {
         // different EIP-712 digest, so the signature no longer authorises it.
         AllowanceTransfer.PermitSingle memory tampered = _permit(1);
         _expectInvalid(alice);
-        at.permit(alice, tampered, sig, _deadline());
+        at.permit(alice, tampered, sig);
     }
 
     function test_permit_wrongChainId_reverts() public {
@@ -212,7 +213,7 @@ contract AllowanceTransferTest is Test {
         assertTrue(digestOnChain1 != at.hashPermitSingle(p), "chainId is part of the domain separator");
 
         _expectInvalid(alice);
-        at.permit(alice, p, sig, _deadline());
+        at.permit(alice, p, sig);
     }
     function test_permit_wrongVerifyingContract_reverts() public {
         // a permit signed against a *different* deployment of AllowanceTransfer must be useless
@@ -222,18 +223,32 @@ contract AllowanceTransferTest is Test {
         bytes memory sig = _sigLow(ALICE_PK, atElsewhere.hashPermitSingle(p));
 
         _expectInvalid(alice);
-        at.permit(alice, p, sig, _deadline());
+        at.permit(alice, p, sig);
     }
 
     function test_permit_expiredSignatureDeadline_reverts() public {
         AllowanceTransfer.PermitSingle memory p = _permit(0);
         bytes memory sig = _sigLow(ALICE_PK, at.hashPermitSingle(p));
-        uint256 sigDeadline = _deadline();
 
         vm.warp(block.timestamp + 2 hours);
 
-        vm.expectRevert(abi.encodeWithSelector(AllowanceTransfer.SignatureExpired.selector, sigDeadline));
-        at.permit(alice, p, sig, sigDeadline);
+        vm.expectRevert(abi.encodeWithSelector(AllowanceTransfer.SignatureExpired.selector, p.sigDeadline));
+        at.permit(alice, p, sig);
+    }
+
+    function test_permit_submitterCannotExtendTheSignedDeadline_reverts() public {
+        // sigDeadline lives inside the signed struct (and its typehash): submitting the same
+        // grant with a later deadline changes the digest, so the signature no longer verifies.
+        // Before the fix the deadline was an unsigned parameter a submitter could set to
+        // type(uint256).max and ignore the bound the signer chose.
+        AllowanceTransfer.PermitSingle memory signed = _permit(0);
+        bytes memory sig = _sigLow(ALICE_PK, at.hashPermitSingle(signed));
+
+        AllowanceTransfer.PermitSingle memory extended = _permit(0);
+        extended.sigDeadline = signed.sigDeadline + 30 days;
+
+        vm.expectRevert(abi.encodeWithSelector(AllowanceTransfer.InvalidSignature.selector, alice));
+        at.permit(alice, extended, sig);
     }
 
     function test_permit_grantAlreadyExpired_reverts() public {
@@ -241,12 +256,13 @@ contract AllowanceTransferTest is Test {
         // outright, even though the signature and the submission deadline are both fine.
         uint48 pastExpiry = uint48(block.timestamp + 1 hours);
         AllowanceTransfer.PermitSingle memory p = _permitFor(0, 100e18, pastExpiry);
+        p.sigDeadline = block.timestamp + 1 days; // stays valid across the warp below
         bytes memory sig = _sigLow(ALICE_PK, at.hashPermitSingle(p));
 
         vm.warp(uint256(pastExpiry) + 1);
 
         vm.expectRevert(abi.encodeWithSelector(AllowanceTransfer.AllowanceAlreadyExpired.selector, pastExpiry));
-        at.permit(alice, p, sig, _deadline());
+        at.permit(alice, p, sig);
     }
 
     function test_permit_malleableHighS_twinReverts() public {
@@ -256,13 +272,13 @@ contract AllowanceTransferTest is Test {
         // (r, N - s, flip(v)) recovers to alice under raw ECDSA, so without OpenZeppelin's low-s
         // rule two different byte strings would mean one grant — malleable signatures.
         _expectInvalid(alice);
-        at.permit(alice, p, _highS(v, r, s), _deadline());
+        at.permit(alice, p, _highS(v, r, s));
     }
 
     function test_permit_canonicalLowSSucceeds_whereHighSFails() public {
         AllowanceTransfer.PermitSingle memory p = _permit(0);
         (uint8 v, bytes32 r, bytes32 s) = _sign(ALICE_PK, at.hashPermitSingle(p));
-        at.permit(alice, p, _lowS(v, r, s), _deadline());
+        at.permit(alice, p, _lowS(v, r, s));
         (uint160 amount,) = at.allowanceOf(alice, address(token), spender);
         assertEq(uint256(amount), 100e18, "low-s form accepted");
     }
@@ -289,7 +305,7 @@ contract AllowanceTransferTest is Test {
         assertTrue(at.isNonceUsed(alice, 5), "nonce marked used");
 
         vm.expectRevert(abi.encodeWithSelector(AllowanceTransfer.NonceAlreadyUsed.selector, alice, uint48(5)));
-        at.permit(alice, p, sig, _deadline());
+        at.permit(alice, p, sig);
     }
 
     function test_invalidateNonce_cannotBeCalledTwice() public {
@@ -414,7 +430,7 @@ contract AllowanceTransferTest is Test {
         AllowanceTransfer.PermitSingle memory p = _permit(0);
         bytes memory sig = _sigLow(ALICE_PK, at.hashPermitSingle(p)); // the wallet's owner signs
 
-        at.permit(address(w), p, sig, _deadline());
+        at.permit(address(w), p, sig);
 
         (uint160 amount,) = at.allowanceOf(address(w), address(token), spender);
         assertEq(uint256(amount), 100e18, "contract wallet accepted");
@@ -427,7 +443,7 @@ contract AllowanceTransferTest is Test {
         bytes memory sig = _sigLow(ALICE_PK, at.hashPermitSingle(p));
 
         _expectInvalid(address(w));
-        at.permit(address(w), p, sig, _deadline());
+        at.permit(address(w), p, sig);
     }
 
     function test_permit_erc1271Wallet_revertingWallet_revertsAsInvalid() public {
@@ -438,7 +454,7 @@ contract AllowanceTransferTest is Test {
 
         // a reverting ERC-1271 check must read as *invalid* — never as approval, never a crash.
         _expectInvalid(address(w));
-        at.permit(address(w), p, sig, _deadline());
+        at.permit(address(w), p, sig);
     }
     // ================================================================ fuzz (run with --fuzz-runs 5000)
 
@@ -446,7 +462,7 @@ contract AllowanceTransferTest is Test {
         AllowanceTransfer.PermitSingle memory p = _permitFor(nonce, amount, uint48(block.timestamp + 1 days));
         bytes memory sig = _sigLow(ALICE_PK, at.hashPermitSingle(p));
 
-        at.permit(alice, p, sig, _deadline());
+        at.permit(alice, p, sig);
 
         (uint160 recorded,) = at.allowanceOf(alice, address(token), spender);
         assertEq(uint256(recorded), uint256(amount), "recorded == signed");
@@ -464,7 +480,7 @@ contract AllowanceTransferTest is Test {
             _permitFor(0, otherAmount, uint48(block.timestamp + 1 days));
 
         _expectInvalid(alice);
-        at.permit(alice, tampered, sig, _deadline());
+        at.permit(alice, tampered, sig);
     }
 
     function testFuzz_transferFrom_spendsExactlyWhatWasGranted(uint256 g, uint256 spend) public {

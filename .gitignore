@@ -51,6 +51,10 @@ contracts/broadcast/
 slither-report.json
 aderyn-report*
 
+# playwright
+apps/web/test-results/
+apps/web/playwright-report/
+
 __pycache__/
 *.pyc
 vercel-login.log
