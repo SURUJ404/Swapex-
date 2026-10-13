@@ -1,0 +1,12 @@
+{
+  "name": "swapex",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "vercel-build": "cd apps/web && npm run build",
+    "build": "cd apps/web && npm run build",
+    "dev": "cd apps/web && npm run dev",
+    "start": "cd apps/web && npm run start",
+    "test": "cd apps/web && npm test"
+  }
+}
