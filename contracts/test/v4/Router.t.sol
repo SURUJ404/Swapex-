@@ -158,6 +158,70 @@ contract RouterTest is Test {
         assertGt(tokenB.balanceOf(address(this)), bBefore, "received tokenB for native input");
     }
 
+    function test_exactInputSingle_overpaidNative_isRefunded() public {
+        PoolKey memory key = PoolKey({
+            currency0: ADDRESS_ZERO(),
+            currency1: currency.wrap(address(tokenB)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: address(0)
+        });
+        router.initialize(key, Q96);
+        router.modifyLiquidity{value: 10_000e18}(
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+        );
+
+        uint256 walletBefore = address(this).balance;
+        uint256 bBefore = tokenB.balanceOf(address(this));
+        // attach 2e18 although the swap consumes far less: the difference must come back,
+        // otherwise it would sit in the router forever (no owner, no withdrawal path).
+        BalanceDelta d = router.exactInputSingle{value: 2e18}(
+            key,
+            SwapParams({zeroForOne: true, amountSpecified: 1e18, sqrtPriceLimitX96: TickMath.MIN_SQRT_RATIO + 1}),
+            address(this),
+            0
+        );
+        uint256 consumed = uint256(-amount0(d));
+        assertLt(consumed, 2e18, "swap did not need all of msg.value");
+        assertGt(tokenB.balanceOf(address(this)), bBefore, "swap consumed native input");
+        assertEq(address(this).balance, walletBefore - consumed, "excess refunded to the payer");
+        assertEq(address(router).balance, 0, "router holds no stray ETH");
+    }
+
+    function test_exactInputSingle_partialFill_refundsTheUnfilledRemainder() public {
+        PoolKey memory key = PoolKey({
+            currency0: ADDRESS_ZERO(),
+            currency1: currency.wrap(address(tokenB)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: address(0)
+        });
+        router.initialize(key, Q96);
+        router.modifyLiquidity{value: 10_000e18}(
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+        );
+
+        uint256 walletBefore = address(this).balance;
+        uint256 bBefore = tokenB.balanceOf(address(this));
+        // a price limit one tick below the current price stops the fill long before amountIn:
+        // the router settles only what was actually consumed and must refund the rest.
+        BalanceDelta d = router.exactInputSingle{value: 1e18}(
+            key,
+            SwapParams({
+                zeroForOne: true,
+                amountSpecified: 1e18,
+                sqrtPriceLimitX96: TickMath.getSqrtRatioAtTick(-60)
+            }),
+            address(this),
+            0
+        );
+        uint256 consumed = uint256(-amount0(d));
+        assertLt(consumed, 1e18, "price limit stopped the fill early");
+        assertGt(tokenB.balanceOf(address(this)), bBefore, "partial fill produced output");
+        assertEq(address(this).balance, walletBefore - consumed, "unfilled remainder refunded");
+        assertEq(address(router).balance, 0, "router holds no stray ETH");
+    }
+
     function test_exactInputSingle_revertsBelowMinOut() public {
         PoolKey memory key = _key(address(tokenA), address(tokenB));
         router.initialize(key, Q96);

@@ -47,6 +47,7 @@ contract Router is IUnlockCallback {
     error InsufficientOutputAmount(int256 amountOut, uint256 minAmountOut);
     error InsufficientPositionLiquidity(uint128 requested, uint128 available);
     error InvalidPermitSpender(address expected, address actual);
+    error NativeRefundFailed();
 
     // ---------------------------------------------------------------- position registry
     // The manager keys positions by the *caller* of `modifyLiquidity` (this router), so every
@@ -82,6 +83,7 @@ contract Router is IUnlockCallback {
         _op = OP_SINGLE;
         delete _pathKeys;
         pm.unlock("");
+        _refundNative();
         return _swapDelta;
     }
 
@@ -122,6 +124,7 @@ contract Router is IUnlockCallback {
         _op = OP_SINGLE;
         delete _pathKeys;
         pm.unlock("");
+        _refundNative();
         return _swapDelta;
     }
 
@@ -145,6 +148,7 @@ contract Router is IUnlockCallback {
         _zeroForOneFirst = zeroForOneFirst;
         _amountIn = amountIn;
         pm.unlock("");
+        _refundNative();
         return _swapDelta;
     }
 
@@ -160,6 +164,7 @@ contract Router is IUnlockCallback {
         _liqParams = mp;
         _op = OP_LIQ;
         pm.unlock("");
+        _refundNative();
         _recordPosition(msg.sender, key, mp);
         return (_liqCallerDelta, _liqFees);
     }
@@ -283,6 +288,20 @@ contract Router is IUnlockCallback {
         } else if (delta > 0) {
             pm.take(c, _recipient, uint256(delta));
         }
+    }
+
+    /// @dev return any native currency the caller attached but the operation did not consume: an
+    ///      exact-input swap that hit its price limit and only partially filled, or simply an
+    ///      over-payment (settlement only forwards the owed delta). Without this the leftover
+    ///      would be stranded — the router has no owner and no withdrawal path.
+    /// @dev reentrancy note: this runs after `pm.unlock` has closed the session, so a receiver
+    ///      that re-enters starts a fresh, self-contained call of its own and can only touch the
+    ///      allowance and balance it brought itself.
+    function _refundNative() private {
+        uint256 excess = address(this).balance;
+        if (excess == 0) return;
+        (bool ok, ) = payable(msg.sender).call{value: excess}("");
+        if (!ok) revert NativeRefundFailed();
     }
 
     /// @dev revert if the swap's output (the positive delta in the output currency) is below
