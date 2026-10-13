@@ -564,9 +564,12 @@ trusted set** — regenerated and uploaded by CI on every run; (c) a CI double-b
 | Command | Result |
 |---|---|
 | `forge build` | ok |
-| `forge test` | **204 passed, 0 failed** (107 other tests + 31 `AllowanceTransferTest` + 21 `RouterTest` (12 + 9 new B.1) + 28 `LimitOrdersTest` + 10 `AdminTest`, incl. the H-2 refund tests, the D28 deadline regression, the F.1 timelock/two-step tests and the B.1 deadline/bounds sweep, + 7 new `TwapGuardTest` (D33)) |
+| `forge test` | **230 passed, 0 failed** (107 other tests + 31 `AllowanceTransferTest` + 21 `RouterTest` (12 + 9 new B.1) + 28 `LimitOrdersTest` + 10 `AdminTest` + 26 `MerkleDistributorTest` (C), incl. the H-2 refund tests, the D28 deadline regression, the F.1 timelock/two-step tests, the B.1 deadline/bounds sweep, the D33 oracle-policy tests and the JS-fixture Merkle claims) |
 | `forge test --match-contract AllowanceTransferTest --fuzz-runs 5000` | **31 passed, 0 failed**, 3 fuzz tests × 5000 runs |
 | `forge test --match-contract LimitOrdersTest --fuzz-runs 5000` | **28 passed, 0 failed**, 2 fuzz tests × 5000 runs |
+| `forge test --match-contract MerkleDistributorTest --fuzz-runs 5000` | **26 passed, 0 failed**, forged-claim fuzz × 5000 runs |
+| `npm test` (apps/web) | **30 passed** (incl. 8 `tests/merkle.test.ts` generator cross-checks) |
+| `node scripts/smoke.mjs` (rotation #7) | PASS — quote + swaps + merkle claim (root == fixture, slot 0 pays 1 SWA, duplicate → `AlreadyClaimed`) |
 | `npx playwright test` (apps/web) | **1 passed** — browser-signed `PermitSingle`: lands, replay → `NonceAlreadyUsed`, wrong chain → `InvalidSignature`, extended `sigDeadline` → `InvalidSignature` |
 | `.github/workflows/ci.yml` | installs `forge-std` + `OpenZeppelin/openzeppelin-contracts@v5.2.0 --no-git`, runs the suite and the 5000-run signature fuzz |
 
