@@ -54,6 +54,13 @@ async function clearLiveGrant(owner) {
 }
 
 test('approve via signed EIP-712 grant: summary panel, permit lands, swap succeeds', async ({ page }) => {
+  // the strict CSP from next.config.mjs is live on this dev server: fail the test if the
+  // browser reports any violation while the flow runs (crypto G.3)
+  const cspViolations = [];
+  page.on('console', (msg) => {
+    if (msg.type() === 'error' && /Content Security Policy/i.test(msg.text())) cspViolations.push(msg.text());
+  });
+
   try {
     await provider.getBlockNumber();
   } catch {
@@ -107,4 +114,6 @@ test('approve via signed EIP-712 grant: summary panel, permit lands, swap succee
 
   const swbAfter = await swb.balanceOf(owner);
   expect(swbAfter.gt(swbBefore)).toBe(true);
+
+  expect(cspViolations, 'browser reported CSP violations during the flow').toEqual([]);
 });
