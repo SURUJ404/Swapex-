@@ -471,3 +471,45 @@ where `observeSingle` must return 0 rather than `6000 * 998300`, uninitialized-p
 => `forge test` 204 passed; OracleGolden still green; Slither Phase 8: 53 contracts, 82 results
 (+4, all inside `TwapGuard.consult`, accepted - `SECURITY.md` Phase 8). No manifest rotation:
 none of the changed contracts is deployed by `Deploy.s.sol`.
+
+## D34 - Supply chain: SHA-pinned Actions, committed SBOM, double-build reproducibility (H)
+
+**Context:** H of the A-I list (npm provenance, SBOM, Sigstore, SHA-pinned Actions,
+double-build reproducibility). Threat-first: CI is part of the trusted computing base -
+everything it runs (actions, toolchains, dependencies) can rewrite what ships.
+
+**Findings:**
+
+1. `.github/workflows/ci.yml` used moving tags (`actions/checkout@v4`, `actions/setup-node@v4`,
+   `foundry-rs/foundry-toolchain@v1`): a re-pointed tag - compromise, insider or upstream
+   mistake - silently changes what runs on every future build.
+2. No SBOM existed: the web app's exact dependency set was only implicit in
+   `package-lock.json`, invisible to review as such.
+3. No reproducibility gate: nothing proved the build lacks nondeterminism (embedded timestamps,
+   absolute-path leakage), which is the foundation of every artifact-hash claim (F.2 manifests).
+
+**Decision:**
+
+* Every `uses:` pinned to a full 40-char commit SHA resolved from the GitHub API against the
+  current major-tag targets, tag kept in a trailing comment for humans: `checkout` v4.4.0 =
+  `11d5960a326750d5838078e36cf38b85af677262`, `setup-node` v4.4.0 =
+  `49933ea5288caeca8642d1e84afbd3f7d6820020`, `foundry-toolchain` v1.9.1 =
+  `908c540300062bd5a7e473851cdb4282204cee09`, `upload-artifact` v4.6.2 =
+  `ea165f8d65b6e75b540449e92b4886f43607fa02`.
+* `apps/web/sbom.cdx.json` committed as the reviewable CycloneDX 1.5 baseline (620 components),
+  generated with npm's built-in `npm sbom` - shipped by the pinned Node toolchain, so the
+  generator itself is not a new supply-chain actor (`@cyclonedx/cyclonedx-npm` was tried first
+  and aborts on this tree's honest peer-range mismatches: `@reach/*` declares react ^16/^17).
+  CI regenerates from the committed lockfile on every run and uploads it as a build artifact;
+  `serialNumber`/`timestamp` differ per run by design, so compare the `components` array.
+* CI contracts job gains a double-build gate: hash all `out/**` artifacts, `forge build
+  --force`, hash again, `diff` must be empty. Verified locally: 154/154 artifacts
+  byte-identical across two forced builds.
+* npm provenance (`npm publish --provenance`) and Sigstore tag signing are **documented, not
+  buildable from this environment** (no npm publish, no GitHub OIDC/token - rule 6: no secrets
+  in the repo). Exact commands recorded in `docs/CRYPTO_DECISIONS.md` section H for when a real
+  release exists.
+
+**Verification:** workflow YAML parses; SBOM parses (CycloneDX 1.5, 620 components, 621
+dependency edges); local double-build diff empty; full battery green (forge 204, fuzz x5000,
+npm test 22, lint 0 errors, build ok, e2e 1, both smokes PASS, manifest verify OK).

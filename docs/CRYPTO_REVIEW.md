@@ -9,7 +9,7 @@ Companion documents (detail lives there, this is the index):
 |---|---|
 | [`docs/CRYPTO_DECISIONS.md`](./CRYPTO_DECISIONS.md) | Threat-first decision log for each item (threat → primitive → rejected alternatives → assumptions → what breaks) |
 | [`contracts/docs/SECURITY.md`](../contracts/docs/SECURITY.md) | Slither 0.11.6 (8 phases) + Aderyn 0.6.8 paper trail: every finding fixed / accepted-with-reason / false-positive |
-| [`contracts/docs/DECISIONS.md`](../contracts/docs/DECISIONS.md) | D27 (signed per-spender allowances), D28 (`sigDeadline` is signed), D29 (two-step ownership + timelock), D30 (signed deployment manifests), D31 (Router deadlines + amount bounds), D32 (commit-reveal rejected), D33 (oracle read policy: creation-stamped bootstrap + `TwapGuard`) |
+| [`contracts/docs/DECISIONS.md`](../contracts/docs/DECISIONS.md) | D27 (signed per-spender allowances), D28 (`sigDeadline` is signed), D29 (two-step ownership + timelock), D30 (signed deployment manifests), D31 (Router deadlines + amount bounds), D32 (commit-reveal rejected), D33 (oracle read policy: creation-stamped bootstrap + `TwapGuard`), D34 (supply chain: SHA-pinned Actions, SBOM, double-build) |
 | [`docs/TESTNET_SECURITY.md`](./TESTNET_SECURITY.md) | Testnet-only posture, admin ownership (§3), dependency pinning, pre-mainnet checklist |
 | [`docs/MEV.md`](./MEV.md) | B.2/B.3: what commit-reveal does and does not stop (evaluated, rejected — D32) and the private-orderflow options |
 
@@ -62,6 +62,12 @@ Companion documents (detail lives there, this is the index):
     initialized pool — before returning a time-weighted tick, never the spot price; the V4
     `OracleHook` was demoted from its false "TWAP-style feed" claim to an honestly-named spot
     recorder (`lastSwapSqrtPrice*`).
+11. **H — supply-chain integrity** (D34): every GitHub Action pinned to a full commit SHA
+    (tags as comments); `apps/web/sbom.cdx.json` committed as a CycloneDX 1.5 baseline (620
+    components) from npm's built-in `npm sbom`, regenerated + uploaded by CI each run; a CI
+    double-build gate proves two clean builds of one checkout are byte-identical (154/154
+    locally); npm provenance + Sigstore signing documented as exact commands for when a real
+    release exists (not exercisable without credentials — rule 6).
 
 ## What each piece protects against — and what it does not
 
@@ -73,6 +79,7 @@ Companion documents (detail lives there, this is the index):
 | F.2/F.3 manifests | Undetected divergence between the repo's claimed addresses/settings and what a chain actually runs; byte-level tamper with a published manifest; bytecode that does not match the recorded build | Authorship on chainId 31337 (the signing key is public — integrity only); admin actions taken *after* deployment; explorer-source mismatches on chains we cannot reach from this environment |
 | B.1 deadlines + bounds | A pending tx executing later than the user allowed (stale/cross-block execution); a multi-hop swap executing with no output floor at all; a deposit paid at a manipulated price (amount0/1Max) or a removal landing below expectation (amount0/1Min); mempool observers *pre-positioning* around a known-priced tx (the floor reverts them out) | Same-block/validator MEV on the reveal itself (deadline ≠ privacy — see `docs/MEV.md`); a `minAmountOut == 0` opt-out the caller explicitly chose (documented; the UI always sends a real floor); price impact *within* the slippage tolerance the user set |
 | D oracle read policy (D33) | A value decision fed spot (the renamed `lastSwapSqrtPrice*` hook, or `slot0`) or a silently truncated / fake-epoch window as if it were a TWAP; a same-block slam-and-return moving a "TWAP"; short windows dominated by manipulation; pools that were never initialized being consulted | Manipulation *within* the window's weighting (inherent to TWAPs — dilution, not elimination: longer windows cost more to move); pools whose ring nobody grew far enough (consult refuses rather than guesses — grow `cardinalityNext`, it is permissionless); the quotes themselves (spot by design, settlement-bounded by D31) |
+| H supply chain (D34) | A re-pointed/malicious CI action tag running in a job that sees the repo and registry; a transitive dependency change invisible in review; a nondeterministic build that makes artifact-hash verification (F.2) meaningless | A compromised GitHub serving a malicious pinned commit; a malicious *already-pinned* dependency version (SBOM makes it auditable, not immune); releases signed before the documented provenance/attestation flow actually exists |
 
 ## Findings and fixes (the part that matters)
 
@@ -104,7 +111,9 @@ Companion documents (detail lives there, this is the index):
 | `npm test` (apps/web) | 22 passed |
 | `npm run lint` | 0 errors (18 pre-existing warnings) |
 | `npm run build` | compiled, all routes prerendered |
-| `.github/workflows/ci.yml` | OZ pinned `v5.2.0`, full forge suite + 5000-run signature fuzz, web lint/test/build + **manifest signature verification** |
+| `npm sbom --sbom-format cyclonedx --sbom-type application` (apps/web) | CycloneDX 1.5, **620 components / 621 edges** — committed baseline `sbom.cdx.json`; CI regenerates + uploads as `web-sbom` |
+| double `forge build --force` + artifact hash diff (local equivalent of the CI gate) | **154/154 artifacts byte-identical** across clean rebuilds |
+| `.github/workflows/ci.yml` | OZ pinned `v5.2.0`, full forge suite + 5000-run signature fuzz, web lint/test/build + **manifest signature verification**; all `uses:` **SHA-pinned** (D34), SBOM regenerated + uploaded each run, contracts job gates on a **double-build diff** (validated YAML) |
 
 **Coverage substitute:** `forge coverage` cannot instrument this codebase (5 approaches fail on
 `PoolManager.sol`, which has zero diff against `HEAD` — details in `CRYPTO_DECISIONS.md`).
@@ -141,13 +150,12 @@ the test that exercises it, all green above.
 
 ## Not done, on purpose or deferred
 
-* **Items A, B, D and F of the original A–I hardening list are complete** (A.1–A.3, B.1–B.3 with
-  B.2 rejected-with-analysis per D32, D33 oracle read policy, F.1–F.3; each with
-  CRYPTO_DECISIONS/DECISIONS entries and verified-by notes above). **Remaining: C (Merkle
-  allowlists — only if a feature needs one), E (hook-address permission tests + verified-hook
-  registry), G (web: typed data everywhere, EIP-55 validation, SRI/CSP tightening), H (supply
-  chain: npm provenance, SBOM, Sigstore, SHA-pinned Actions, double-build reproducibility),
-  I (advanced crypto — proposal first).**
+* **Items A, B, D, F and H of the original A–I hardening list are complete** (A.1–A.3, B.1–B.3
+  with B.2 rejected-with-analysis per D32, D33 oracle read policy, F.1–F.3, H supply chain per
+  D34; each with CRYPTO_DECISIONS/DECISIONS entries and verified-by notes above). **Remaining:
+  C (Merkle allowlists — only if a feature needs one), E (hook-address permission tests +
+  verified-hook registry), G (web: typed data everywhere, EIP-55 validation, SRI/CSP
+  tightening), I (advanced crypto — proposal first).**
 * **No primitives written by hand, no new dependencies added**: OZ v5.2.0 (pinned), ethers v5,
   Playwright for the browser test.
 * **Nothing mainnet-shaped**: anvil chain 31337 only, public dev keys only, no secrets in the

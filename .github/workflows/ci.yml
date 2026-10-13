@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# H (supply chain): every action below is pinned to a full commit SHA; the human-readable
+# tag follows in a comment. Moving tags (@v4, @v1) can be re-pointed by a compromised or
+# careless upstream — a SHA cannot. The SBOM is regenerated from the committed lockfile on
+# every run, and the contracts job proves the build is reproducible (two clean builds of
+# the same checkout must be byte-identical).
 jobs:
   web:
     runs-on: ubuntu-latest
@@ -12,13 +17,22 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
+      # H: CycloneDX SBOM from the committed lockfile (npm built-in, ships with the pinned
+      # node toolchain — no extra package to trust); uploaded as a build artifact. The
+      # committed sbom.cdx.json is the reviewable baseline; serialNumber/timestamp differ
+      # per run by design, so compare the `components` array, not the raw bytes.
+      - run: npm sbom --sbom-format cyclonedx --sbom-type application > sbom.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-sbom
+          path: apps/web/sbom.cdx.json
       - run: npm run lint
       - run: npm test
       - run: npm run build
@@ -34,12 +48,19 @@ jobs:
       run:
         working-directory: contracts
     steps:
-      - uses: actions/checkout@v4
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
       # lib/ is gitignored, so every dependency is installed fresh and pinned by tag.
       - run: forge install foundry-rs/forge-std --no-git
       - run: forge install OpenZeppelin/openzeppelin-contracts@v5.2.0 --no-git
       - run: forge build
+      # H: double-build reproducibility — two clean builds of the same checkout must
+      # produce byte-identical artifacts (catches embedded timestamps, path leakage or
+      # compiler drift; verified locally: 154 artifacts identical).
+      - run: find out -name '*.json' | sort | xargs sha256sum > /tmp/build1.sha256
+      - run: forge build --force
+      - run: find out -name '*.json' | sort | xargs sha256sum > /tmp/build2.sha256
+      - run: diff /tmp/build1.sha256 /tmp/build2.sha256 && echo "reproducible - artifacts identical across clean rebuilds"
       - run: forge build --sizes || echo "::warning::PoolManager exceeds EIP-170 by design (deployed locally with anvil --code-size-limit 131072); size gate relaxed to match deployment target"
       - run: forge test -vv
       # signature / permit code is fuzzed far harder than the rest of the suite (>= 5000 runs).
