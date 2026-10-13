@@ -1,7 +1,7 @@
 {
   "chainId": 31337,
-  "commit": "65f6c487974b1362b664f4ad01d4d25255fecaa9",
-  "generatedAt": "2026-10-13T15:01:28.402Z",
+  "commit": "c87b8b71083ba18b309b5aa969a7eed62f2fc998",
+  "generatedAt": "2026-10-13T18:05:39.492Z",
   "foundry": {
     "solc": "0.8.26",
     "optimizer": true,
@@ -14,7 +14,7 @@
   "contracts": {
     "TimelockController": {
       "addresses": [
-        "0x82EdA215Fa92B45a3a76837C65Ab862b6C7564a8"
+        "0x5FbDB2315678afecb367f032d93F642f64180aa3"
       ],
       "initCodeHash": "0x03b688ddbe494390db3dca8d72ab33585d06846eb1f4db3b4cfdf4f330984a72",
       "artifactDeployedCodeHash": "0x5c03cf88fa5416e27fcf47364a053499703dc892b2241930e987302cf8f33dde",
@@ -22,7 +22,7 @@
     },
     "PoolManager": {
       "addresses": [
-        "0x87006e75a5B6bE9D1bbF61AC8Cd84f05D9140589"
+        "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
       ],
       "initCodeHash": "0x46eb7ca2fb09499327ad4accbc0dd4cf61d8acef71e29ad25b7169b06af2f23f",
       "artifactDeployedCodeHash": "0xe0ab54f980e934793b216d1dcf52e27fbfd1c7204837c848c298512acc1b8b7b",
@@ -30,45 +30,53 @@
     },
     "AllowanceTransfer": {
       "addresses": [
-        "0x51C65cd0Cdb1A8A8b79dfc2eE965B1bA0bb8fc89"
+        "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
       ],
       "initCodeHash": "0x22bc3465545e47e97f4750b83cd2e8d6e3aaa0e77619fb3cf83f3a201197a5f2",
       "artifactDeployedCodeHash": "0x04da269e437ec9f9ece9cd7073cea489ee3d2e4e373d89e75e3b0130d46dee6d",
-      "onchainCodeHash": "0x6bc64711e2bb1bb2519fc0ff5cd95430f0066da84178f10c229a4b75f1a93adb"
+      "onchainCodeHash": "0x2ada05be3ec86a5071007298634482553f846f92f4aa5ab3522e0f757b5a2d87"
     },
     "Router": {
       "addresses": [
-        "0x8fC8CFB7f7362E44E472c690A6e025B80E406458"
+        "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9"
       ],
       "initCodeHash": "0x93c8ffe8ff70b4d6894d906691c2e7bdd78a1730caeb5cb7e79a3bebbcee1efc",
       "artifactDeployedCodeHash": "0xac2903e2c12883424136d6f7498c18bc2f31d7089ef97d2f155973c46d462166",
-      "onchainCodeHash": "0xf95292315efbcba3c6cd35b707654ba210ed5ea4c9c60619d5427670c90ef900"
+      "onchainCodeHash": "0xbc756e7c3cb2bb7d7e56691eb845fd8d7f5af0749229b808c68cc8b15bf19231"
     },
     "Quoter": {
       "addresses": [
-        "0xC7143d5bA86553C06f5730c8dC9f8187a621A8D4"
+        "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
       ],
       "initCodeHash": "0x9271e3a74e1d75bc9939f0a5efbaf26079e5431870e35e418ff7ce21abe80cb8",
       "artifactDeployedCodeHash": "0x738521fe8df0cf9590827ca1b932be6f5065ecb6aea68311dce6b859032994af",
-      "onchainCodeHash": "0xb98e4da2d94bbabe10c9aa6e545d7f8998ecc8716462e49dce1ca0da5f576400"
+      "onchainCodeHash": "0x202f634946ffe82654b3a931c147585b334c2aac3a059fdf1d3716bec9468759"
     },
     "LimitOrders": {
       "addresses": [
-        "0x359570B3a0437805D0a71457D61AD26a28cAC9A2"
+        "0x5FC8d32690cc91D4c39d9d3abcBD16989F875707"
       ],
       "initCodeHash": "0x4b15382a4351be73c56cb9d3d5217f54b053dfcf34c1a634470bc2ab6bc8e4e5",
       "artifactDeployedCodeHash": "0x0cb93a8d16976d02aa0189bc193630c24653cc3b564887138174c48f2b068911",
-      "onchainCodeHash": "0x8312d11ce8a74eb6c77cf92444c2e6e2c84bf52e47f531ba2a76088d877bc9fb"
+      "onchainCodeHash": "0xee6d9124eb36ba03d2981987f31a9fd8e5984c4fd60e645866541c0f0bbb2827"
     },
     "MockERC20": {
       "addresses": [
-        "0xc9952Fc93Fa9bE383ccB39008c786b9f94eAc95d",
-        "0xDde063eBe8E85D666AD99f731B4Dbf8C98F29708",
-        "0xD5724171C2b7f0AA717a324626050BD05767e2C6"
+        "0x0165878A594ca255338adfa4d48449f69242Eb8F",
+        "0xa513E6E4b8f2a923D98304ec87F64353C4D5C853",
+        "0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6"
       ],
       "initCodeHash": "0x9de953532d32e21363d2a4e625ad96e0d605398efd1e166b9d2413721c2de447",
       "artifactDeployedCodeHash": "0xe1cd237abe52898bcc86e639f187787277ae22d93e0242d4fe3c1bd5c6ee4619",
       "onchainCodeHash": "0x34f875ac3dc39c83991e3851067b31fc2ef3ead6822b526485fcd643d81866bb"
+    },
+    "MerkleDistributor": {
+      "addresses": [
+        "0xc5a5C42992dECbae36851359345FE25997F5C42d"
+      ],
+      "initCodeHash": "0x8a40fd46006102481bc96eab97eca01435018f7933755447fd425f1069c27371",
+      "artifactDeployedCodeHash": "0x16d1cac408b7a63034e68930985927279e58549390442c62a4710f77b32ba6f6",
+      "onchainCodeHash": "0xe26dac1cb7cab1ab6fb1b6e6b30fb7ea51921348a412aee6a75900388fc71267"
     }
   }
 }

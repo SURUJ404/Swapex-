@@ -40,7 +40,8 @@ Companion documents (detail lives there, this is the index):
    the canonical broadcast flow and passes `forge script --verify` through on non-local chains.
 7. **Web flow**: two-layer grants (one-time ERC-20 `approve` to `AllowanceTransfer`, then a
    bounded `permit`/`setAllowance` to the Router), regenerated ABI, addresses pointing at the
-   current anvil deployment (rotation #6, matching the committed manifest).
+   current anvil deployment (rotation #7, matching the committed manifest — includes
+   `MERKLE_DISTRIBUTOR`).
 8. **Browser end-to-end proof** (`apps/web/e2e/`): Playwright signs a real `PermitSingle`
    in the page via an injected EIP-1193 shim, cross-checks the digest in Node, lands the grant
    on-chain, and asserts the abuse cases against real revert selectors.
@@ -118,11 +119,11 @@ Companion documents (detail lives there, this is the index):
 | `forge test` | **230 passed, 0 failed** (204 + 26 new `MerkleDistributorTest` — JS-fixture claims, duplicates, bitmap word boundary, forged-proof matrix, timelocked rotation incl. cancel, reentrant token) |
 | `forge test --fuzz-runs 5000 --match-contract 'AllowanceTransferTest\|LimitOrdersTest'` | **31 + 28 passed, 0 failed** (signature code × 5000 runs; LimitOrders now settles through the deadline+bound Router) |
 | `forge test --fuzz-runs 5000 --match-contract MerkleDistributorTest` | **26 passed, 0 failed** (forged-claim fuzz × 5000: random `(index, account, amount)` never validates) |
-| `forge script` broadcast (via `deploy.mjs --broadcast`) | rotation #6 on anvil (B.1 ABI break required redeploy); signed manifest refreshed |
+| `forge script` broadcast (via `deploy.mjs --broadcast`) | **rotation #7** on a fresh anvil (C added `MerkleDistributor`, deployed last so earlier CREATE order is unchanged; the fresh chain resets nonces, so every address changed); signed manifest refreshed with all 10 contracts |
 | `node scripts/verify-manifest.mjs 31337 --rpc http://127.0.0.1:8545` | all PASS — EIP-191 signature, commit ancestry, settings match, on-chain codehash rows; tampered manifest → FAIL (exit 1) |
 | `npx playwright test` (apps/web, `npm run test:e2e`) | **1 passed** — sign → cross-verify → land → replay `NonceAlreadyUsed` → wrong-chain `InvalidSignature` → extended-deadline `InvalidSignature` |
-| `node scripts/smoke.mjs` | PASS (quote + native swap + token swap) on rotation #6, with `deadline` arg on both swaps |
-| `node scripts/smokeLiquidity.mjs` | PASS (add with `amountMax` bounds + remove with `amountMin` bounds) on rotation #6 |
+| `node scripts/smoke.mjs` | PASS (quote + native swap + token swap) on rotation #7, with `deadline`/expiry anchored to `max(chain, wall)`; **merkle claim**: root == committed fixture root, slot 0 pays 1 SWA to the leaf account, duplicate claim reverts `AlreadyClaimed` |
+| `node scripts/smokeLiquidity.mjs` | PASS (add with `amountMax` bounds + remove with `amountMin` bounds) on rotation #7 |
 | `npm test` (apps/web) | 30 passed (22 + 8 new `tests/merkle.test.ts` — leaf/pair conventions, independent fold, tamper matrix, odd-tree carry, fixture reproduction) |
 | `npm run merkle -- ../../contracts/test/fixtures/allowlist.json ../../contracts/test/fixtures/merkle.json` (apps/web) | regenerates the committed fixture: root `0xdb3e3af9…c15`, 4 entries; forge suite parses the same file via `fs_permissions` (read-only) |
 | `npm run lint` | 0 errors (18 pre-existing warnings) |

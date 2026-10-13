@@ -561,3 +561,7 @@ tamper matrix, odd-tree carry, byte-for-byte fixture reproduction) => npm 30; Sl
 56 contracts, 82 results - ZERO referencing `MerkleDistributor`. Caught by inspection before
 commit: the generator's first draft dropped upper-level proof siblings for right-child leaves
 (member-set fix; the fixture-reproduction and fold tests now pin it).
+**Deployment:** `Deploy.s.sol` reads the committed fixture root (so deployed root, fixture
+proofs, and tests cannot drift), deploys the distributor LAST (earlier CREATE order intact),
+and mints the 10 SWA the fixture promises - rotation #7 signed; `smoke.mjs` claims slot 0 with
+the fixture proof on-chain and asserts the duplicate call reverts `AlreadyClaimed`.

@@ -3,11 +3,13 @@ pragma solidity ^0.8.26;
 
 import {Script, console} from "forge-std/Script.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PoolManager, ModifyLiquidityParams} from "../src/v4/PoolManager.sol";
 import {Router} from "../src/v4/periphery/Router.sol";
 import {AllowanceTransfer} from "../src/v4/periphery/AllowanceTransfer.sol";
 import {LimitOrders} from "../src/v4/periphery/LimitOrders.sol";
 import {Quoter} from "../src/v4/periphery/Quoter.sol";
+import {MerkleDistributor} from "../src/v4/periphery/MerkleDistributor.sol";
 import {currency} from "../src/v4/types/Currency.sol";
 import {PoolKey} from "../src/v4/types/PoolKey.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
@@ -16,9 +18,10 @@ uint160 constant Q96 = uint160(1 << 96);
 
 /// @notice Local-dev deploy: spins up the Swapex V4 core + periphery, the A.3 LimitOrders
 ///         contract, an F.1 TimelockController (the PoolManager's owner), three 18-decimal mock
-///         tokens, and a handful of 1:1 pools seeded with liquidity so the frontend has live,
-///         tradeable markets on a fresh anvil node. Logs every address as `KEY=0x...` so a
-///         script can parse them straight into the web app's config.
+///         tokens, the C MerkleDistributor (fixture root, timelock-owned), and a handful of
+///         1:1 pools seeded with liquidity so the frontend has live, tradeable markets on a
+///         fresh anvil node. Logs every address as `KEY=0x...` so a script can parse them
+///         straight into the web app's config.
 contract Deploy is Script {
     address internal deployer;
 
@@ -68,6 +71,16 @@ contract Deploy is Script {
         _seedPool(pm, router, address(swa), address(swb));
         _seedPool(pm, router, address(swb), address(swc));
 
+        // C: allowlist distributor rooted at the COMMITTED JS-generated fixture tree - the very
+        // file contracts/test/v4/MerkleDistributor.t.sol verifies against, so the deployed root,
+        // the fixture proofs, and the tests can never drift apart (D35). Owner is the timelock:
+        // rotating the root is schedule -> 2-day delay -> execute, cancellable in between.
+        // Deployed last so every earlier CREATE keeps its nonce (rotation #6 addresses hold).
+        string memory fixture = vm.readFile("test/fixtures/merkle.json");
+        bytes32 distRoot = abi.decode(vm.parseJson(fixture, ".root"), (bytes32));
+        MerkleDistributor dist = new MerkleDistributor(IERC20(address(swa)), distRoot, address(timelock));
+        swa.mint(address(dist), 10 ether); // fixture pays 1+2+3+4 SWA across four anvil accounts
+
         vm.stopBroadcast();
 
         console.log("POOL_MANAGER=%s", address(pm));
@@ -76,6 +89,7 @@ contract Deploy is Script {
         console.log("QUOTER=%s", address(quoter));
         console.log("LIMIT_ORDERS=%s", address(limitOrders));
         console.log("TIMELOCK=%s", address(timelock));
+        console.log("MERKLE_DISTRIBUTOR=%s", address(dist));
         console.log("SWA=%s", address(swa));
         console.log("SWB=%s", address(swb));
         console.log("SWC=%s", address(swc));

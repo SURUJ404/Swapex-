@@ -15,11 +15,12 @@ const PK =
   process.env.PRIVATE_KEY ||
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' // anvil #0
 
-const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x51C65cd0Cdb1A8A8b79dfc2eE965B1bA0bb8fc89'
-const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x8fC8CFB7f7362E44E472c690A6e025B80E406458'
-const QUOTER = process.env.NEXT_PUBLIC_QUOTER || '0xC7143d5bA86553C06f5730c8dC9f8187a621A8D4'
-const SWA = process.env.NEXT_PUBLIC_SWA || '0xc9952Fc93Fa9bE383ccB39008c786b9f94eAc95d'
-const SWB = process.env.NEXT_PUBLIC_SWB || '0xDde063eBe8E85D666AD99f731B4Dbf8C98F29708'
+const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0'
+const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9'
+const QUOTER = process.env.NEXT_PUBLIC_QUOTER || '0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9'
+const SWA = process.env.NEXT_PUBLIC_SWA || '0x0165878A594ca255338adfa4d48449f69242Eb8F'
+const SWB = process.env.NEXT_PUBLIC_SWB || '0xa513E6E4b8f2a923D98304ec87F64353C4D5C853'
+const DIST = process.env.NEXT_PUBLIC_MERKLE_DISTRIBUTOR || '0xc5a5C42992dECbae36851359345FE25997F5C42d'
 const ZERO = '0x0000000000000000000000000000000000000000'
 const MIN_SQRT = ethers.BigNumber.from('4295128739').add(1)
 const MAX_SQRT = ethers.BigNumber.from('1461446703485210103287273052203988822378723970342').sub(1)
@@ -101,4 +102,33 @@ const DEADLINE = Math.max((await provider.getBlock('latest')).timestamp, Math.fl
   ok(gained.gte(minOut), `received ${ethers.utils.formatUnits(gained, 18)} SWB >= minOut`)
 }
 
-console.log('\nSMOKE PASS: quote + native swap + token swap all succeeded on-chain.')
+// ------------------------------------------------ C: Merkle allowlist claim (D35) + duplicate fail
+{
+  const dist = new ethers.Contract(DIST, abi('MerkleDistributor'), wallet)
+  const fixture = JSON.parse(
+    readFileSync(join(__dirname, '..', '..', '..', 'contracts', 'test', 'fixtures', 'merkle.json'), 'utf8')
+  )
+  ok(
+    (await dist.merkleRoot()).toLowerCase() === fixture.root.toLowerCase(),
+    `distributor root == committed fixture root (${fixture.root.slice(0, 12)}…)`
+  )
+  const c = fixture.claims[0] // index 0 = this signer (anvil #0), 1 SWA
+  ok(c.account.toLowerCase() === wallet.address.toLowerCase(), `fixture claim ${c.index} is for the deployer`)
+  ok(!(await dist.isClaimed(c.index)), `claim slot ${c.index} is unclaimed`)
+  const before = await swa.balanceOf(wallet.address)
+  await (await dist.claim(c.index, c.account, c.amount, c.proof)).wait()
+  const gained = (await swa.balanceOf(wallet.address)).sub(before)
+  ok(gained.eq(ethers.BigNumber.from(c.amount)), `claimed ${ethers.utils.formatEther(c.amount)} SWA for leaf account`)
+  ok(await dist.isClaimed(c.index), `claim slot ${c.index} marked claimed`)
+  const sel = ethers.utils.id('AlreadyClaimed(uint256)').slice(0, 10)
+  let dup = false
+  try {
+    await dist.callStatic.claim(c.index, c.account, c.amount, c.proof)
+  } catch (e) {
+    const data = (e.data || (e.error && e.error.data) || '').toLowerCase()
+    dup = data.startsWith(sel) || /revert/i.test(String(e.message))
+  }
+  ok(dup, `duplicate claim reverts AlreadyClaimed`)
+}
+
+console.log('\nSMOKE PASS: quote + swaps + merkle claim (incl. duplicate rejection) all succeeded on-chain.')
