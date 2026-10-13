@@ -1,0 +1,74 @@
+{
+  "chainId": 31337,
+  "commit": "741e56505e15514ecf424c7856a0144257aa8ec1",
+  "generatedAt": "2026-10-13T14:12:14.706Z",
+  "foundry": {
+    "solc": "0.8.26",
+    "optimizer": true,
+    "optimizerRuns": 800,
+    "bytecodeHash": "none",
+    "cborMetadata": false,
+    "evmVersion": "cancun",
+    "viaIr": true
+  },
+  "contracts": {
+    "TimelockController": {
+      "addresses": [
+        "0x02df3a3F960393F5B349E40A599FEda91a7cc1A7"
+      ],
+      "initCodeHash": "0x03b688ddbe494390db3dca8d72ab33585d06846eb1f4db3b4cfdf4f330984a72",
+      "artifactDeployedCodeHash": "0x5c03cf88fa5416e27fcf47364a053499703dc892b2241930e987302cf8f33dde",
+      "onchainCodeHash": "0x5c03cf88fa5416e27fcf47364a053499703dc892b2241930e987302cf8f33dde"
+    },
+    "PoolManager": {
+      "addresses": [
+        "0x821f3361D454cc98b7555221A06Be563a7E2E0A6"
+      ],
+      "initCodeHash": "0x46eb7ca2fb09499327ad4accbc0dd4cf61d8acef71e29ad25b7169b06af2f23f",
+      "artifactDeployedCodeHash": "0xe0ab54f980e934793b216d1dcf52e27fbfd1c7204837c848c298512acc1b8b7b",
+      "onchainCodeHash": "0xe0ab54f980e934793b216d1dcf52e27fbfd1c7204837c848c298512acc1b8b7b"
+    },
+    "AllowanceTransfer": {
+      "addresses": [
+        "0x1780bCf4103D3F501463AD3414c7f4b654bb7aFd"
+      ],
+      "initCodeHash": "0x22bc3465545e47e97f4750b83cd2e8d6e3aaa0e77619fb3cf83f3a201197a5f2",
+      "artifactDeployedCodeHash": "0x04da269e437ec9f9ece9cd7073cea489ee3d2e4e373d89e75e3b0130d46dee6d",
+      "onchainCodeHash": "0xe733042c5aa574596d12dbe30acf87f35e4e018b16048ff57468485897da4cbc"
+    },
+    "Router": {
+      "addresses": [
+        "0x5133BBdfCCa3Eb4F739D599ee4eC45cBCD0E16c5"
+      ],
+      "initCodeHash": "0xe8c08e51b213939ad1036eab29a968810af2421b7529ee0e45dddbea45fd213d",
+      "artifactDeployedCodeHash": "0x6577c3cca1eada7240a73e2b34c6b1053dcffdd02ee03265ba9b8e9569fee9cc",
+      "onchainCodeHash": "0x9fd76c9f82e853f40f9c6f4050a97e5e89149bd5fca8b1407c57cf0c2dcd6592"
+    },
+    "Quoter": {
+      "addresses": [
+        "0x71089Ba41e478702e1904692385Be3972B2cBf9e"
+      ],
+      "initCodeHash": "0x9271e3a74e1d75bc9939f0a5efbaf26079e5431870e35e418ff7ce21abe80cb8",
+      "artifactDeployedCodeHash": "0x738521fe8df0cf9590827ca1b932be6f5065ecb6aea68311dce6b859032994af",
+      "onchainCodeHash": "0x09c323ccee367128b371f661040a27beb54c28f22ca1477572594ac159f1d2db"
+    },
+    "LimitOrders": {
+      "addresses": [
+        "0x8F4ec854Dd12F1fe79500a1f53D0cbB30f9b6134"
+      ],
+      "initCodeHash": "0x432fe71beba5c6cfa32c0d4a01a9911c584115d3df5182d0c04b0d59abc61abc",
+      "artifactDeployedCodeHash": "0xc08bd53ba79996d81fe24c0dabd4c42cb520e0b9771a9b6bd52ce2f2a3a14b23",
+      "onchainCodeHash": "0xb4964df69ffc670fdcfa6a1ade1796e8cdf29b0b99559ec44530382c6fcceb6e"
+    },
+    "MockERC20": {
+      "addresses": [
+        "0xC66AB83418C20A65C3f8e83B3d11c8C3a6097b6F",
+        "0xeF31027350Be2c7439C1b0BE022d49421488b72C",
+        "0x12Bcb546bC60fF39F1Adfc7cE4605d5Bd6a6A876"
+      ],
+      "initCodeHash": "0x9de953532d32e21363d2a4e625ad96e0d605398efd1e166b9d2413721c2de447",
+      "artifactDeployedCodeHash": "0xe1cd237abe52898bcc86e639f187787277ae22d93e0242d4fe3c1bd5c6ee4619",
+      "onchainCodeHash": "0x34f875ac3dc39c83991e3851067b31fc2ef3ead6822b526485fcd643d81866bb"
+    }
+  }
+}

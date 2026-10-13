@@ -15,9 +15,9 @@ import path from 'path';
 const RPC = 'http://127.0.0.1:8545';
 const CHAIN_ID = 31337;
 
-const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x3aAde2dCD2Df6a8cAc689EE797591b2913658659';
-const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0xab16A69A5a8c12C732e0DEFF4BE56A70bb64c926';
-const SWA = process.env.NEXT_PUBLIC_SWA || '0x1f10F3Ba7ACB61b2F50B9d6DdCf91a6f787C0E82';
+const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x1780bCf4103D3F501463AD3414c7f4b654bb7aFd';
+const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x5133BBdfCCa3Eb4F739D599ee4eC45cBCD0E16c5';
+const SWA = process.env.NEXT_PUBLIC_SWA || '0xC66AB83418C20A65C3f8e83B3d11c8C3a6097b6F';
 
 const provider = new ethers.providers.JsonRpcProvider(RPC);
 const at = new ethers.Contract(

@@ -22,6 +22,11 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      # F.2: the signed deployment manifest must verify against this checkout (EIP-191
+      # signature + recorded commit + compiler settings). No RPC here, so the live
+      # on-chain codehash check is skipped with a warning — run it locally against anvil:
+      #   node scripts/verify-manifest.mjs 31337 --rpc http://127.0.0.1:8545
+      - run: node scripts/verify-manifest.mjs 31337
 
   contracts:
     runs-on: ubuntu-latest

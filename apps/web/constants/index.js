@@ -9,13 +9,13 @@ import AllowanceTransferAbi from './abi/AllowanceTransfer.json'
 // NOTE: Deploy.s.sol deploys AllowanceTransfer between PoolManager and Router, so every address
 // after PoolManager shifts whenever the script is re-run on a chain with existing nonces.
 export const POOL_MANAGER_ADDRESS =
-  process.env.NEXT_PUBLIC_POOL_MANAGER || '0xffa7CA1AEEEbBc30C874d32C7e22F052BbEa0429'
+  process.env.NEXT_PUBLIC_POOL_MANAGER || '0x821f3361D454cc98b7555221A06Be563a7E2E0A6'
 export const ALLOWANCE_TRANSFER_ADDRESS =
-  process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x3aAde2dCD2Df6a8cAc689EE797591b2913658659'
+  process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x1780bCf4103D3F501463AD3414c7f4b654bb7aFd'
 export const ROUTER_ADDRESS =
-  process.env.NEXT_PUBLIC_ROUTER || '0xab16A69A5a8c12C732e0DEFF4BE56A70bb64c926'
+  process.env.NEXT_PUBLIC_ROUTER || '0x5133BBdfCCa3Eb4F739D599ee4eC45cBCD0E16c5'
 export const QUOTER_ADDRESS =
-  process.env.NEXT_PUBLIC_QUOTER || '0xE3011A37A904aB90C8881a99BD1F6E21401f1522'
+  process.env.NEXT_PUBLIC_QUOTER || '0x71089Ba41e478702e1904692385Be3972B2cBf9e'
 
 export const POOL_MANAGER_ABI = PoolManagerAbi
 export const ROUTER_ABI = RouterAbi
@@ -54,21 +54,21 @@ export const TOKEN_LIST = [
   {
     symbol: 'SWA',
     name: 'Swapex A',
-    address: process.env.NEXT_PUBLIC_SWA || '0x1f10F3Ba7ACB61b2F50B9d6DdCf91a6f787C0E82',
+    address: process.env.NEXT_PUBLIC_SWA || '0xC66AB83418C20A65C3f8e83B3d11c8C3a6097b6F',
     decimals: 18,
     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
   },
   {
     symbol: 'SWB',
     name: 'Swapex B',
-    address: process.env.NEXT_PUBLIC_SWB || '0x457cCf29090fe5A24c19c1bc95F492168C0EaFdb',
+    address: process.env.NEXT_PUBLIC_SWB || '0xeF31027350Be2c7439C1b0BE022d49421488b72C',
     decimals: 18,
     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
   },
   {
     symbol: 'SWC',
     name: 'Swapex C',
-    address: process.env.NEXT_PUBLIC_SWC || '0x525C7063E7C20997BaaE9bDa922159152D0e8417',
+    address: process.env.NEXT_PUBLIC_SWC || '0x12Bcb546bC60fF39F1Adfc7cE4605d5Bd6a6A876',
     decimals: 18,
     logo: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
   },

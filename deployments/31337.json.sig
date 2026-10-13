@@ -1,0 +1,6 @@
+{
+  "manifest": "31337.json",
+  "algorithm": "eip-191",
+  "signer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "signature": "0x882640794ee4e5d79436e140020433277090299f6cb6d30e9f199a8b210759101ec65c999d5edd708f9782cf1f7d8d8c30edea101cf825cf5107b6b90eb110541b"
+}

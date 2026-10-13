@@ -329,3 +329,36 @@ first shifts every subsequent `CREATE` address (rotation #4). Verification: `for
 early execute reverts, post-delay execute applies, sub-min-delay schedule reverts, cancellation
 kills a queued op), plus an on-chain read after `--broadcast`: `pm.owner() == timelock`,
 `pendingOwner == 0`, `getMinDelay == 2 days`.
+
+
+## D30 — Signed deployment manifests (F.2) and explorer source verification (F.3)
+**Decision:** `deployments/<chainId>.json` records, for a `Deploy.s.sol` broadcast: every contract's
+address(es), the git commit, the compiler settings parsed from `foundry.toml` (solc 0.8.26, runs
+800, via_ir, cancun, `bytecode_hash=none`, `cbor_metadata=false`), and three keccak256 hashes per
+contract — init code, local artifact deployed code, and the *live on-chain* runtime code.
+Tooling lives beside the smoke scripts in `apps/web/scripts/` (the stack's ethers v5 does the
+hashing/signing): `build-manifest.mjs` (reads broadcast + artifacts + `eth_getCode` + git),
+`sign-manifest.mjs` (EIP-191 over the file's exact bytes -> `<chainId>.json.sig`),
+`verify-manifest.mjs` (signature, recorded-commit-is-ancestor, settings-vs-foundry.toml warning,
+and `eth_getCode` hash comparison when `--rpc` is given), and `deploy.mjs` — the canonical deploy
+flow that broadcasts, refreshes the manifest, and passes `forge script --verify` through to the
+explorer on non-local chains (`ETHERSCAN_API_KEY` required; loud skip on 31337, which has no
+explorer). CI runs the signature/commit/settings verification in the web job.
+**Rationale:** The threat is *undetected divergence* between what the repo claims is deployed and
+what a chain actually runs — a stale or doctored address list, a rebuild with drifted compiler
+settings, or bytecode that does not match the audited source. A signed manifest turns "trust the
+last person who edited constants" into a checkable statement: the signature fails on any byte of
+tamper, the codehash check fails on any bytecode mismatch, and the settings record ties the
+bytecode back to `foundry.toml`. The on-chain hash is stored alongside the artifact hash because
+artifacts cannot verify deployed code directly: `immutableReferences` slots are zero in
+`deployedBytecode`, so Router/Quoter/LimitOrders-style contracts would always mismatch. On chainId
+31337 the signing key is anvil dev key #0 — public by design; that key proves *integrity and
+publication*, never authorship, and is useless on any chain where the key is not public knowledge
+(documented in the script headers; a real release signs with a maintained key via `PRIVATE_KEY`).
+Source verification (F.3) is deliberately delegated to forge's built-in `--verify` rather than a
+hand-rolled explorer client, and cannot be executed against a real explorer from this environment
+(no API key, testnet-only scope) — the wrapper's local path is exercised end-to-end instead.
+Verification run: build -> sign -> verify against the live rotation-#5 deployment
+(all PASS), tampered-manifest verify (FAIL, exit 1), `deploy.mjs` simulate (exit 0),
+`deploy.mjs --broadcast` (rotation #5 + manifest refresh), both smokes PASS, `npm test`,
+`npm run lint` (0 errors), `npm run build`, Playwright e2e 1 passed.
