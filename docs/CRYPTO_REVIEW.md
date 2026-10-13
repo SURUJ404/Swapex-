@@ -8,9 +8,10 @@ Companion documents (detail lives there, this is the index):
 | Document | Contents |
 |---|---|
 | [`docs/CRYPTO_DECISIONS.md`](./CRYPTO_DECISIONS.md) | Threat-first decision log for each item (threat → primitive → rejected alternatives → assumptions → what breaks) |
-| [`contracts/docs/SECURITY.md`](../contracts/docs/SECURITY.md) | Slither 0.11.6 (6 phases) + Aderyn 0.6.8 paper trail: every finding fixed / accepted-with-reason / false-positive |
-| [`contracts/docs/DECISIONS.md`](../contracts/docs/DECISIONS.md) | D27 (signed per-spender allowances), D28 (`sigDeadline` is signed), D29 (two-step ownership + timelock), D30 (signed deployment manifests) |
+| [`contracts/docs/SECURITY.md`](../contracts/docs/SECURITY.md) | Slither 0.11.6 (7 phases) + Aderyn 0.6.8 paper trail: every finding fixed / accepted-with-reason / false-positive |
+| [`contracts/docs/DECISIONS.md`](../contracts/docs/DECISIONS.md) | D27 (signed per-spender allowances), D28 (`sigDeadline` is signed), D29 (two-step ownership + timelock), D30 (signed deployment manifests), D31 (Router deadlines + amount bounds), D32 (commit-reveal rejected) |
 | [`docs/TESTNET_SECURITY.md`](./TESTNET_SECURITY.md) | Testnet-only posture, admin ownership (§3), dependency pinning, pre-mainnet checklist |
+| [`docs/MEV.md`](./MEV.md) | B.2/B.3: what commit-reveal does and does not stop (evaluated, rejected — D32) and the private-orderflow options |
 
 ## What shipped
 
@@ -39,10 +40,20 @@ Companion documents (detail lives there, this is the index):
    the canonical broadcast flow and passes `forge script --verify` through on non-local chains.
 7. **Web flow**: two-layer grants (one-time ERC-20 `approve` to `AllowanceTransfer`, then a
    bounded `permit`/`setAllowance` to the Router), regenerated ABI, addresses pointing at the
-   current anvil deployment (rotation #5, matching the committed manifest).
+   current anvil deployment (rotation #6, matching the committed manifest).
 8. **Browser end-to-end proof** (`apps/web/e2e/`): Playwright signs a real `PermitSingle`
    in the page via an injected EIP-1193 shim, cross-checks the digest in Node, lands the grant
    on-chain, and asserts the abuse cases against real revert selectors.
+9. **B.1 — Tx deadlines + amount bounds on every Router entry** (D31): all four entries
+   (`exactInputSingle`, `exactInputSingleWithPermit`, `exactInput`, `modifyLiquidity`) take an
+   absolute `deadline` enforced before any state write (`TransactionTooOld`); the multi-hop path
+   gained the `minAmountOut` floor it never had; `modifyLiquidity` gained a sign-aware
+   `LiquidityBounds{amount0Min, amount1Min, amount0Max, amount1Max}` checked against the caller's
+   net delta inside the unlock callback. The web deadline was previously **collected but never
+   sent** (`lib/config.js` said "the V4 router has no deadline") — it is now wired from the
+   slippage settings into every swap tx, and from the settings defaults into both liquidity forms.
+   B.2 (commit-reveal) was evaluated and **rejected** with analysis (D32, `docs/MEV.md`); B.3
+   (private orderflow) is documentation only (`docs/MEV.md`).
 
 ## What each piece protects against — and what it does not
 
@@ -52,6 +63,7 @@ Companion documents (detail lives there, this is the index):
 | A.3 signed orders | Forged/replayed/extended-deadline orders; double-fills; fills beyond the signed rate; maker funds routed anywhere except the signed receiver via the trusted router | Maker's price risk while an order rests; filler choice of *when* to fill; the pool key's `hooks`/`tickSpacing` are **not** inside the signed struct (documented residual in `CRYPTO_DECISIONS.md` A.3 — tokens, fee, amounts, receiver, deadline, nonce are) |
 | F.1 two-step + timelock | A single signed tx instantly moving protocol-fee admin (compromised admin key changing fees/fee tiers before anyone reacts); mistyped transfers stranding ownership | A fully compromised multisig/timelock role set (all signers collude or leak); governance-lite attacks needing no key (none exist here — no token, no flash-loanable vote); the local-anvil deployer being a public key (by design, §1 of TESTNET_SECURITY) |
 | F.2/F.3 manifests | Undetected divergence between the repo's claimed addresses/settings and what a chain actually runs; byte-level tamper with a published manifest; bytecode that does not match the recorded build | Authorship on chainId 31337 (the signing key is public — integrity only); admin actions taken *after* deployment; explorer-source mismatches on chains we cannot reach from this environment |
+| B.1 deadlines + bounds | A pending tx executing later than the user allowed (stale/cross-block execution); a multi-hop swap executing with no output floor at all; a deposit paid at a manipulated price (amount0/1Max) or a removal landing below expectation (amount0/1Min); mempool observers *pre-positioning* around a known-priced tx (the floor reverts them out) | Same-block/validator MEV on the reveal itself (deadline ≠ privacy — see `docs/MEV.md`); a `minAmountOut == 0` opt-out the caller explicitly chose (documented; the UI always sends a real floor); price impact *within* the slippage tolerance the user set |
 
 ## Findings and fixes (the part that matters)
 
@@ -62,6 +74,7 @@ Companion documents (detail lives there, this is the index):
 | `missing-zero-check` on `setOwner(0)` → permanent unowned state | Slither 0.11.6 | **Superseded by F.1/D29** — `setOwner` is gone; two-step transfer makes a zero owner structurally impossible, regressions `test_factory_transferOwnershipIsTwoStepAndZeroSafe` + `test_ownership_zeroAddressCannotBecomeOwner` |
 | 17 Slither findings in Phases 1–5 (reentrancy-no-eth/events/benign under `lock`, uninitialized-local, FullMath XOR, low-level calls, cyclomatic complexity, permit-path flag) | Slither 0.11.6 | Accepted or false-positive, each justified in `SECURITY.md`; reentrancy covered by `ReentrantTokenTest` |
 | 3 Slither instances in the Phase 6 run (`LimitOrders.fillOrder` reentrancy-events, timestamp×2, complexity 15) + clean result on the Ownable2Step migration | Slither 0.11.6 re-run (52 contracts, 77 results filtered) | Accepted/false-positive with reasons in `SECURITY.md` Phase 6; **no** ownership finding on the migration |
+| +1 Slither instance in the Phase 7 run: `Router._enforceDeadline` reads `block.timestamp` (the B.1 deadline check itself); the four entries' `unused-return` on `pm.unlock()` are unchanged, and no bound/deadline logic was flagged | Slither 0.11.6 re-run (52 contracts, 78 results filtered) | `timestamp` accepted per the Phase 5 ruling — deadline semantics *require* a timestamp comparison; entry in `SECURITY.md` Phase 7 |
 | 18 Aderyn Lows (admin-only centrality, bounded loops, Uniswap-literal constants, struct shadowing, PUSH0/cancun, `isNonceUsed`/`hashPermitSingle` as external API, …) | Aderyn 0.6.8 | Grouped triage table in `SECURITY.md` |
 
 ## Verification (run on this repository)
@@ -69,13 +82,13 @@ Companion documents (detail lives there, this is the index):
 | Command | Result |
 |---|---|
 | `forge build` | ok |
-| `forge test` | **188 passed, 0 failed** |
-| `forge test --fuzz-runs 5000 --match-contract 'AllowanceTransferTest\|LimitOrdersTest'` | **31 + 28 passed, 0 failed** (signature code × 5000 runs) |
-| `forge script` broadcast (via `deploy.mjs --broadcast`) | rotation #5 on anvil; `pm.owner == timelock`, `pendingOwner == 0`, `getMinDelay == 2 days` read back over RPC |
-| `node scripts/verify-manifest.mjs 31337 --rpc http://127.0.0.1:8545` | all PASS — EIP-191 signature, commit ancestry, settings match, 10 on-chain codehash rows; tampered manifest → FAIL (exit 1) |
+| `forge test` | **197 passed, 0 failed** (188 + 9 new B.1 bound/deadline tests) |
+| `forge test --fuzz-runs 5000 --match-contract 'AllowanceTransferTest\|LimitOrdersTest'` | **31 + 28 passed, 0 failed** (signature code × 5000 runs; LimitOrders now settles through the deadline+bound Router) |
+| `forge script` broadcast (via `deploy.mjs --broadcast`) | rotation #6 on anvil (B.1 ABI break required redeploy); signed manifest refreshed |
+| `node scripts/verify-manifest.mjs 31337 --rpc http://127.0.0.1:8545` | all PASS — EIP-191 signature, commit ancestry, settings match, on-chain codehash rows; tampered manifest → FAIL (exit 1) |
 | `npx playwright test` (apps/web, `npm run test:e2e`) | **1 passed** — sign → cross-verify → land → replay `NonceAlreadyUsed` → wrong-chain `InvalidSignature` → extended-deadline `InvalidSignature` |
-| `node scripts/smoke.mjs` | PASS (quote + native swap + token swap) on rotation #5 |
-| `node scripts/smokeLiquidity.mjs` | PASS (add + registry read + remove) on rotation #5 |
+| `node scripts/smoke.mjs` | PASS (quote + native swap + token swap) on rotation #6, with `deadline` arg on both swaps |
+| `node scripts/smokeLiquidity.mjs` | PASS (add with `amountMax` bounds + remove with `amountMin` bounds) on rotation #6 |
 | `npm test` (apps/web) | 22 passed |
 | `npm run lint` | 0 errors (18 pre-existing warnings) |
 | `npm run build` | compiled, all routes prerendered |
@@ -114,9 +127,9 @@ the test that exercises it, all green above.
 
 ## Not done, on purpose or deferred
 
-* **Items A and F of the original A–I hardening list are complete** (A.1–A.3, F.1–F.3; each with
-  CRYPTO_DECISIONS/DECISIONS entries and verified-by notes above). **Remaining: B (MEV:
-  deadline/amount bounds tests, optional commit-reveal, private-orderflow docs), C (Merkle
+* **Items A, B and F of the original A–I hardening list are complete** (A.1–A.3, B.1–B.3 with
+  B.2 rejected-with-analysis per D32, F.1–F.3; each with CRYPTO_DECISIONS/DECISIONS entries and
+  verified-by notes above). **Remaining: C (Merkle
   allowlists — only if a feature needs one), D (TWAP oracle hardening: min window, cardinality,
   no-spot-read rule), E (hook-address permission tests + verified-hook registry), G (web: typed
   data everywhere, EIP-55 validation, SRI/CSP tightening), H (supply chain: npm provenance,

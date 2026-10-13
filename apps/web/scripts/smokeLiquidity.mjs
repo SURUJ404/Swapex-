@@ -13,9 +13,9 @@ const abi = (name) => JSON.parse(readFileSync(join(__dirname, '..', 'constants',
 
 const RPC = process.env.RPC_URL || 'http://127.0.0.1:8545'
 const PK = process.env.PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
-const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x1780bCf4103D3F501463AD3414c7f4b654bb7aFd'
-const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x5133BBdfCCa3Eb4F739D599ee4eC45cBCD0E16c5'
-const SWA = process.env.NEXT_PUBLIC_SWA || '0xC66AB83418C20A65C3f8e83B3d11c8C3a6097b6F'
+const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x51C65cd0Cdb1A8A8b79dfc2eE965B1bA0bb8fc89'
+const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x8fC8CFB7f7362E44E472c690A6e025B80E406458'
+const SWA = process.env.NEXT_PUBLIC_SWA || '0xc9952Fc93Fa9bE383ccB39008c786b9f94eAc95d'
 const ZERO = '0x0000000000000000000000000000000000000000'
 const TICK_SPACING = 60
 
@@ -27,7 +27,7 @@ function ok(cond, msg) {
 const provider = new ethers.providers.JsonRpcProvider(RPC)
 const wallet = new ethers.Wallet(PK, provider)
 const router = new ethers.Contract(ROUTER, abi('Router'), wallet)
-const pm = new ethers.Contract(process.env.NEXT_PUBLIC_POOL_MANAGER || '0x821f3361D454cc98b7555221A06Be563a7E2E0A6', abi('PoolManager'), provider)
+const pm = new ethers.Contract(process.env.NEXT_PUBLIC_POOL_MANAGER || '0x87006e75a5B6bE9D1bbF61AC8Cd84f05D9140589', abi('PoolManager'), provider)
 const swa = new ethers.Contract(SWA, abi('ERC20'), wallet)
 
 // native (address 0) sorts first -> currency0 = native, currency1 = SWA
@@ -51,6 +51,8 @@ const owed = fullRangeAmountsForLiquidity(sqrtP, TICK_SPACING, liquidity)
 ok(owed.amount0.lte(amount0) && owed.amount1.lte(amount1), `lib amounts within intended deposit`)
 
 const swaBefore = await swa.balanceOf(wallet.address)
+// B.1: tx deadline for every Router entry (chain time, +20 minutes).
+const DEADLINE = (await provider.getBlock('latest')).timestamp + 1200
 // two-grant model: ERC-20 allowance to the AllowanceTransfer (once), then a bounded,
 // expiring grant from it to the Router -- exactly what hooks/useApprove.js does in the app.
 const at = new ethers.Contract(AT, abi('AllowanceTransfer'), wallet)
@@ -64,6 +66,9 @@ const tx = await router.modifyLiquidity(
   key,
   { tickLower, tickUpper, liquidityDelta: liquidity },
   wallet.address,
+  // B.1 bounds: pay at most the intended deposit on both sides (mins unbound).
+  { amount0Min: 0, amount1Min: 0, amount0Max: amount0, amount1Max: amount1 },
+  DEADLINE,
   { value: amount0 }
 )
 const rc = await tx.wait()
@@ -79,7 +84,11 @@ ok(swaAfterAdd.lt(swaBefore), `pulled SWA for the deposit (delta ${ethers.utils.
 const tx2 = await router.modifyLiquidity(
   key,
   { tickLower, tickUpper, liquidityDelta: liquidity.mul(-1) },
-  wallet.address
+  wallet.address,
+  // B.1 bounds: receive at least 99.5% of the amounts this deposit just paid (price is
+  // unchanged within the smoke run, so the floor is comfortably met; maxes unbound).
+  { amount0Min: owed.amount0.mul(995).div(1000), amount1Min: owed.amount1.mul(995).div(1000), amount0Max: ethers.constants.MaxUint256, amount1Max: ethers.constants.MaxUint256 },
+  DEADLINE
 )
 await (tx2.wait())
 const tracked2 = await router.getPositionLiquidity(wallet.address, key, tickLower, tickUpper)

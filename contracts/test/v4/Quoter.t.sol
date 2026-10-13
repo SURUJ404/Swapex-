@@ -52,7 +52,11 @@ contract QuoterTest is Test {
 
     function _seed(PoolKey memory key) internal {
         router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e20}), address(this)
+            key,
+            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e20}),
+            address(this),
+            Router.LiquidityBounds(0, 0, type(uint256).max, type(uint256).max),
+            type(uint256).max
         );
     }
 
@@ -78,7 +82,7 @@ contract QuoterTest is Test {
         // sort lower: zeroForOne sells currency0 (so output is currency1), else output is currency0.
         address outToken = currency.unwrap(zeroForOne ? key.currency1 : key.currency0);
         uint256 outBefore = MockERC20(outToken).balanceOf(address(this));
-        router.exactInputSingle(key, sp, address(this), 0);
+        router.exactInputSingle(key, sp, address(this), 0, type(uint256).max);
         uint256 received = MockERC20(outToken).balanceOf(address(this)) - outBefore;
         assertEq(uint256(quotedOut), received, "quote == actual output");
     }

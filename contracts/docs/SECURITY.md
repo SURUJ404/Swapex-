@@ -178,6 +178,29 @@ the constructor-supplied initial owner (the zero-address class of bug is structu
 | `cyclomatic-complexity` | `LimitOrders.fillOrder` (15) | **By design.** A sequential validation pipeline (order sanity → signature → digest binding → remaining → CEI writes → pull → rights → swap), each stage guarded by its own custom error for testability — strictly simpler than the already-accepted `SwapexPool.swap` (30) and `PoolManager._swap` (34). |
 
 
+## Phase 7 — crypto B.1 Router deadlines + amount bounds (Slither re-run)
+
+Re-ran Slither 0.11.6 after the B.1 change (deadline on all four Router entries, `minAmountOut`
+on `exactInput`, `LiquidityBounds` on `modifyLiquidity` — D31), same invocation as Phase 6:
+
+```
+analyzed (52 contracts with 102 detectors), 78 result(s) found
+```
+
+**+1 vs Phase 6 (77 → 78).** The one new instance is the `timestamp` detector on
+`Router._enforceDeadline` (`block.timestamp > deadline`) — the deadline check itself. The rest are
+the Phase 1–6 findings above (line numbers shifted again; the Phase 6 table's
+`LimitOrders.fillOrder #190` router call is now the 5-argument form). Nothing in the bound
+enforcement is flagged: `_enforceMinOut` / `_enforceBounds` are pure checks with custom errors,
+and no new reentrancy, arithmetic or arbitrary-send instance appeared.
+
+| Detector | Location | Assessment |
+|---|---|---|
+| `timestamp` (new) | `Router._enforceDeadline` (`Router.sol#350-352`; called at `#97`, `#131`, `#169`, `#198`) | **Accepted — same ruling as Phases 5 and 6.** The whole point of B.1 is a wall-clock bound; deadline semantics *require* `block.timestamp`. The threat removed (tx executing whenever mined) is the one B.1 exists for; a ±seconds skew cannot make an expired tx profitable, it only moves it an adjacent block, where the bound it violated is still violated. |
+| `unused-return` on `pm.unlock()` (4 entries) | `exactInputSingle`, `exactInputSingleWithPermit`, `exactInput`, `modifyLiquidity` | **Pre-existing, unchanged.** `unlock()` returns the callback's (empty) bytes, which these entries ignore by design — results are read back from storage deltas; first triaged in Phase 3. |
+| `missing-zero-check` on `recipient` | `exactInputSingleWithPermit.recipient` | **Pre-existing, unchanged.** `recipient == address(0)` means "burn to zero address", which is the caller's own choice (same as every Uniswap router); the swap can only move the caller's own funds there. |
+
+
 ## Aderyn 0.6.8 — 7 High / 18 Low, all triaged (one fixed)
 
 **How it ran.** Aderyn ships no Windows prebuilt binary (the GitHub releases contain only

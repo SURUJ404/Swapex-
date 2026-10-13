@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { Contract, BigNumber } from 'ethers'
+import { Contract, BigNumber, constants } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
 import { TOKEN_LIST, ROUTER_ADDRESS, ROUTER_ABI, POOL_TICK_SPACING } from '../constants'
 import TokenSelectModal from './TokenSelectModal'
@@ -7,7 +7,8 @@ import NetworkGuard from './NetworkGuard'
 import useTransact from '../hooks/useTransact'
 import { buildPoolKey, isZeroForOne, getPoolState } from '../lib/pool'
 import { fullRangeTicks, fullRangeAmountsForLiquidity } from '../lib/liquidity'
-import { formatAmount } from '../lib/amounts'
+import { formatAmount, minAfterSlippage, deadlineFromNow } from '../lib/amounts'
+import { DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES } from '../lib/config'
 import { NATIVE_ADDRESS } from '../constants'
 
 const PERCENTS = [25, 50, 75, 100]
@@ -92,6 +93,11 @@ export default function RemoveLiquidityForm() {
   const removeLiquidity = async () => {
     if (!account || !library || !position || liquidityToRemove.isZero()) return
     const router = new Contract(ROUTER_ADDRESS, ROUTER_ABI, library.getSigner())
+    // B.1 bounds: receive at least the quoted amounts minus slippage (maxes unbound — receiving
+    // more is fine), and never execute after the deadline the settings chose. `out` is already
+    // ordered to tokenA/tokenB, so map back to currency0/currency1 via aIs0.
+    const min0 = out ? minAfterSlippage(aIs0 ? out.a : out.b, DEFAULT_SLIPPAGE_BPS) : BigNumber.from(0)
+    const min1 = out ? minAfterSlippage(aIs0 ? out.b : out.a, DEFAULT_SLIPPAGE_BPS) : BigNumber.from(0)
     await run({
       label: 'Remove Liquidity',
       successMessage: `Removed liquidity from ${tokenA.symbol}/${tokenB.symbol}`,
@@ -99,7 +105,9 @@ export default function RemoveLiquidityForm() {
         router.modifyLiquidity(
           key,
           { tickLower, tickUpper, liquidityDelta: liquidityToRemove.mul(-1) },
-          account
+          account,
+          { amount0Min: min0, amount1Min: min1, amount0Max: constants.MaxUint256, amount1Max: constants.MaxUint256 },
+          deadlineFromNow(DEFAULT_DEADLINE_MINUTES)
         ),
       onSuccess: () => {
         setPercent(0)

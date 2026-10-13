@@ -187,7 +187,9 @@ contract LimitOrders is EIP712 {
             amountSpecified: int256(fillAmount),
             sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1
         });
-        BalanceDelta d = router.exactInputSingle(key, sp, order.receiver, minOut);
+        // the signed deadline was already checked above, and is reused as the router's tx-level
+        // deadline: a fill can never execute later than the maker permitted (B.1).
+        BalanceDelta d = router.exactInputSingle(key, sp, order.receiver, minOut, order.deadline);
         // the output currency is the positive side of an exact-input delta; floor at zero so a
         // degenerate no-fill (price limit hit immediately) reports 0 rather than wrapping.
         int256 out = zeroForOne ? amount1(d) : amount0(d);

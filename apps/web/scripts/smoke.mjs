@@ -15,11 +15,11 @@ const PK =
   process.env.PRIVATE_KEY ||
   '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' // anvil #0
 
-const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x1780bCf4103D3F501463AD3414c7f4b654bb7aFd'
-const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x5133BBdfCCa3Eb4F739D599ee4eC45cBCD0E16c5'
-const QUOTER = process.env.NEXT_PUBLIC_QUOTER || '0x71089Ba41e478702e1904692385Be3972B2cBf9e'
-const SWA = process.env.NEXT_PUBLIC_SWA || '0xC66AB83418C20A65C3f8e83B3d11c8C3a6097b6F'
-const SWB = process.env.NEXT_PUBLIC_SWB || '0xeF31027350Be2c7439C1b0BE022d49421488b72C'
+const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x51C65cd0Cdb1A8A8b79dfc2eE965B1bA0bb8fc89'
+const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0x8fC8CFB7f7362E44E472c690A6e025B80E406458'
+const QUOTER = process.env.NEXT_PUBLIC_QUOTER || '0xC7143d5bA86553C06f5730c8dC9f8187a621A8D4'
+const SWA = process.env.NEXT_PUBLIC_SWA || '0xc9952Fc93Fa9bE383ccB39008c786b9f94eAc95d'
+const SWB = process.env.NEXT_PUBLIC_SWB || '0xDde063eBe8E85D666AD99f731B4Dbf8C98F29708'
 const ZERO = '0x0000000000000000000000000000000000000000'
 const MIN_SQRT = ethers.BigNumber.from('4295128739').add(1)
 const MAX_SQRT = ethers.BigNumber.from('1461446703485210103287273052203988822378723970342').sub(1)
@@ -44,6 +44,10 @@ const swb = new ethers.Contract(SWB, abi('ERC20'), provider)
 
 console.log(`signer ${wallet.address} on ${(await provider.getNetwork()).chainId}`)
 
+// B.1: every Router entry now takes a tx deadline (absolute unix seconds). Use chain time so a
+// skewed local clock can't make the tx dead on arrival.
+const DEADLINE = (await provider.getBlock('latest')).timestamp + 1200
+
 // ---------------------------------------------------------------- native (ETH) -> SWA
 {
   const k = key(ZERO, SWA)
@@ -57,7 +61,7 @@ console.log(`signer ${wallet.address} on ${(await provider.getNetwork()).chainId
 
   const before = await swa.balanceOf(wallet.address)
   const minOut = quotedOut.mul(995).div(1000) // 0.5% floor
-  const tx = await router.exactInputSingle(k, sp, wallet.address, minOut, { value: amountIn })
+  const tx = await router.exactInputSingle(k, sp, wallet.address, minOut, DEADLINE, { value: amountIn })
   const rc = await tx.wait()
   ok(rc.status === 1, `ETH->SWA swap tx confirmed (${rc.transactionHash.slice(0, 10)}…)`)
   const gained = (await swa.balanceOf(wallet.address)).sub(before)
@@ -86,7 +90,7 @@ console.log(`signer ${wallet.address} on ${(await provider.getNetwork()).chainId
   await (await at.setAllowance(SWA, ROUTER, amountIn, block1.timestamp + 3600)).wait()
   const before = await swb.balanceOf(wallet.address)
   const minOut = quotedOut.mul(995).div(1000)
-  const tx = await router.exactInputSingle(k, sp, wallet.address, minOut)
+  const tx = await router.exactInputSingle(k, sp, wallet.address, minOut, DEADLINE)
   const rc = await tx.wait()
   ok(rc.status === 1, `SWA->SWB swap tx confirmed`)
   const gained = (await swb.balanceOf(wallet.address)).sub(before)

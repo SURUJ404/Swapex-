@@ -205,7 +205,8 @@ at rest (both layers re-checked per fill in `_ensureSpendRights`).
   same as the Router (documented in TESTNET_SECURITY: mock tokens only).
 
 **Verified by:** `forge test --match-contract LimitOrdersTest` → **28 passed, 0 failed** (2 fuzz
-tests at `--fuzz-runs 5000`); `forge test` full suite → **178 passed, 0 failed**.
+tests at `--fuzz-runs 5000`); `forge test` full suite → **197 passed, 0 failed** (the suite grows
+with each subsequent item; B.1 added 9, F.1 added 10).
 
 ---
 
@@ -267,12 +268,81 @@ tests rather than re-derived in comments.
 
 ---
 
+## B - MEV and front-running resistance (B.1 done, B.2 rejected, B.3 documented)
+
+### Threat
+
+Four named, concrete attacks against users of this DEX:
+
+1. **Stale/cross-block execution.** A signed swap sits in the public mempool and executes in a
+   later block than the user priced for — nobody even needs to attack; the price simply moved, and
+   the user's tx ran anyway. Before B.1 *nothing on-chain* enforced a deadline: the web UI
+   collected a deadline and never sent it (`lib/config.js`: "the V4 router has no deadline").
+2. **Sandwiching an unbounded trade.** A searcher sees a pending swap, front-runs it to move the
+   price, lets the victim fill at the worse price, and back-runs. `minAmountOut` makes the victim's
+   tx *revert* instead of filling worse. The single-pool path had this floor; **the multi-hop
+   `exactInput` had no output bound at all** — the worst offender.
+3. **Manipulated liquidity entry/exit.** A deposit or removal executed at a manipulated price:
+   paying more than intended to add, or receiving less than quoted to remove. `modifyLiquidity`
+   had neither a max nor a min nor a deadline.
+4. **Intent-hiding for large orders** (B.2's target): searchers pre-positioning around a trade
+   they can observe before it lands.
+
+### Primitive / decision
+
+No new cryptographic primitive is involved — this item is *validation*, done with plain checks
+(never hand-rolled crypto): an absolute `deadline` per transaction (Uniswap-style
+`block.timestamp > deadline` guard as the first statement of every Router entry), a `minAmountOut`
+floor on **every** swap path (multi-hop included), and a sign-aware
+`LiquidityBounds{amount0Min, amount1Min, amount0Max, amount1Max}` on liquidity operations checked
+against the caller's net delta before settlement. Full rationale, caller updates and verification
+in `contracts/docs/DECISIONS.md` **D31**.
+
+### Rejected alternatives
+
+* *Commit-reveal for large swaps (B.2 as originally listed).* On a public mempool the **reveal**
+  tx is exactly as visible as a plain swap, so searchers sandwich the reveal just the same — the
+  commit only delays visibility, it does not remove it. Hiding intent actually requires a private
+  relay for the reveal (B.3), at which point the relay, not the commit, does the work. Building it
+  would also add escrow custody (new contract holding user funds) or a second grant, plus bond
+  mechanics whose only griefing target is the committer. Evaluated honestly, not built — full
+  write-up in `contracts/docs/DECISIONS.md` **D32** and `docs/MEV.md`.
+* *Banning `minAmountOut == 0`.* Rejected: it is the caller's explicit opt-out (Uniswap's
+  semantics too), the Quoter-parity test depends on it, and a deadline cannot be opted out of
+  (deadline `0` is simply already expired) so there is always a non-bypassable bound on every tx.
+* *Private-orderflow infrastructure (relayer service, encrypted mempool).* Out of scope for this
+  repo — B.3 documents how to *use* existing protected RPCs instead of building one.
+* *Per-hop bounds on multi-hop paths.* Rejected: a floor on the final output subsumes them
+  (intermediate hops only move into the next pool's input), and a single floor is what the user
+  actually prices.
+
+### Assumptions
+
+* Front-ends always pass a real floor and a sane deadline (the web app does: slippage-settings
+  derived, default 20 minutes); integrators who pass `minAmountOut == 0` are explicitly accepting
+  any price, at their own user's expense.
+* Block timestamps are monotonic and reasonably sane on target chains (standard AMM assumption;
+  deadline granularity is seconds, not blocks).
+* Deadlines protect against *time*, not against validators ordering same-block MEV — that is the
+  private-orderflow part (B.3), documented as a non-goal here.
+
+### What breaks
+
+* **ABI break:** every Router entry gained parameters — old calldata fails, so deployments rotate
+  (rotation #6) and integrators must re-encode. `LimitOrders` and `Deploy.s.sol` were updated in
+  the same change; the web ABI was regenerated.
+* A deadline that is too tight turns a slow mempool wait into a failed tx (UI default: 20 min);
+  bounds that are too tight turn price movement into a revert. Both failures are safe (nothing
+  executed) and recoverable (resubmit), unlike the unfunded failures they replace.
+
+---
+
 ## Verification (commands + results, run on this repository)
 
 | Command | Result |
 |---|---|
 | `forge build` | ok |
-| `forge test` | **188 passed, 0 failed** (115 pre-existing + 31 `AllowanceTransferTest` + 12 `RouterTest` + 28 `LimitOrdersTest` + 10 `AdminTest`, incl. the H-2 refund tests, the D28 deadline regression and the F.1 timelock/two-step tests) |
+| `forge test` | **197 passed, 0 failed** (107 other tests + 31 `AllowanceTransferTest` + 21 `RouterTest` (12 + 9 new B.1) + 28 `LimitOrdersTest` + 10 `AdminTest`, incl. the H-2 refund tests, the D28 deadline regression, the F.1 timelock/two-step tests and the B.1 deadline/bounds sweep) |
 | `forge test --match-contract AllowanceTransferTest --fuzz-runs 5000` | **31 passed, 0 failed**, 3 fuzz tests × 5000 runs |
 | `forge test --match-contract LimitOrdersTest --fuzz-runs 5000` | **28 passed, 0 failed**, 2 fuzz tests × 5000 runs |
 | `npx playwright test` (apps/web) | **1 passed** — browser-signed `PermitSingle`: lands, replay → `NonceAlreadyUsed`, wrong chain → `InvalidSignature`, extended `sigDeadline` → `InvalidSignature` |

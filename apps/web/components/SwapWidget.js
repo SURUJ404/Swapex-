@@ -15,6 +15,7 @@ import {
   parseAmount,
   minAfterSlippage,
   formatAmount,
+  deadlineFromNow,
 } from '../lib/amounts'
 import { DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES, HIGH_PRICE_IMPACT } from '../lib/config'
 
@@ -106,6 +107,7 @@ export default function SwapWidget() {
           },
           account,
           min,
+          deadlineFromNow(deadlineMin),
           nativeIn ? { value: amountIn } : {}
         ),
       onSuccess: () => {

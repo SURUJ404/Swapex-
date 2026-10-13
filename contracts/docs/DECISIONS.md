@@ -303,23 +303,23 @@ recorded web addresses were rotated once more. Tests:
 `InvalidSignature`, because the digest changed).
 
 
-## D29 — Two-step ownership on both core contracts, with the PoolManager owned by an OpenZeppelin `TimelockController`
+## D29 ï¿½ Two-step ownership on both core contracts, with the PoolManager owned by an OpenZeppelin `TimelockController`
 **Decision:** `PoolManager` and `SwapexFactory` now inherit OpenZeppelin `Ownable2Step` with an
 explicit `constructor(address initialOwner)`; the custom `owner`/`onlyOwner`/`NotOwner`,
 `setOwner` and `OwnerChanged` code is deleted in favour of OZ's `OwnableUnauthorizedAccount` /
 `OwnableInvalidOwner` and `OwnershipTransferred`/`OwnershipTransferStarted`. `Deploy.s.sol`
 deploys a `TimelockController(2 days, proposers=[deployer], executors=[deployer], admin=deployer)`
-*first* and passes it as the manager's initial owner, so the owner is the timelock from genesis —
+*first* and passes it as the manager's initial owner, so the owner is the timelock from genesis ï¿½
 never a pending-transfer state. `LimitOrders` is also deployed there now. The remaining privileged
 actions are `PoolManager.setProtocolFee`/`collectProtocol` and `SwapexFactory.enableFeeAmount`;
-the multisig — not the deployer — is documented as the timelock's final admin/owner for any real
+the multisig ï¿½ not the deployer ï¿½ is documented as the timelock's final admin/owner for any real
 deployment (testnet keeps the anvil deployer for operability; see `docs/TESTNET_SECURITY.md`).
 **Rationale:** One-step `setOwner` meant a single signed transaction could move protocol-fee
 admin to any address (including one with no key) with no confirmation step, and an EOA owner
 made fee changes instantaneous and uncancellable. `Ownable2Step` removes the stranded-owner class
 of bug outright (OZ v5 even allows `transferOwnership(address(0))` to *cancel* a pending transfer,
 so no input can brick ownership), and the timelock makes every admin change delayed and
-cancellable by role — the concrete threat being a compromised admin key able to redirect protocol
+cancellable by role ï¿½ the concrete threat being a compromised admin key able to redirect protocol
 fees (or a hostile fee tier) before anyone can react. `new PoolManager(address(timelock))` instead
 of constructor-then-`transferOwnership` was required precisely because two-step transfer would
 have left the manager pending-owner for the whole delay; passing the owner at construction keeps
@@ -331,34 +331,94 @@ kills a queued op), plus an on-chain read after `--broadcast`: `pm.owner() == ti
 `pendingOwner == 0`, `getMinDelay == 2 days`.
 
 
-## D30 — Signed deployment manifests (F.2) and explorer source verification (F.3)
+## D30 ï¿½ Signed deployment manifests (F.2) and explorer source verification (F.3)
 **Decision:** `deployments/<chainId>.json` records, for a `Deploy.s.sol` broadcast: every contract's
 address(es), the git commit, the compiler settings parsed from `foundry.toml` (solc 0.8.26, runs
 800, via_ir, cancun, `bytecode_hash=none`, `cbor_metadata=false`), and three keccak256 hashes per
-contract — init code, local artifact deployed code, and the *live on-chain* runtime code.
+contract ï¿½ init code, local artifact deployed code, and the *live on-chain* runtime code.
 Tooling lives beside the smoke scripts in `apps/web/scripts/` (the stack's ethers v5 does the
 hashing/signing): `build-manifest.mjs` (reads broadcast + artifacts + `eth_getCode` + git),
 `sign-manifest.mjs` (EIP-191 over the file's exact bytes -> `<chainId>.json.sig`),
 `verify-manifest.mjs` (signature, recorded-commit-is-ancestor, settings-vs-foundry.toml warning,
-and `eth_getCode` hash comparison when `--rpc` is given), and `deploy.mjs` — the canonical deploy
+and `eth_getCode` hash comparison when `--rpc` is given), and `deploy.mjs` ï¿½ the canonical deploy
 flow that broadcasts, refreshes the manifest, and passes `forge script --verify` through to the
 explorer on non-local chains (`ETHERSCAN_API_KEY` required; loud skip on 31337, which has no
 explorer). CI runs the signature/commit/settings verification in the web job.
 **Rationale:** The threat is *undetected divergence* between what the repo claims is deployed and
-what a chain actually runs — a stale or doctored address list, a rebuild with drifted compiler
+what a chain actually runs ï¿½ a stale or doctored address list, a rebuild with drifted compiler
 settings, or bytecode that does not match the audited source. A signed manifest turns "trust the
 last person who edited constants" into a checkable statement: the signature fails on any byte of
 tamper, the codehash check fails on any bytecode mismatch, and the settings record ties the
 bytecode back to `foundry.toml`. The on-chain hash is stored alongside the artifact hash because
 artifacts cannot verify deployed code directly: `immutableReferences` slots are zero in
 `deployedBytecode`, so Router/Quoter/LimitOrders-style contracts would always mismatch. On chainId
-31337 the signing key is anvil dev key #0 — public by design; that key proves *integrity and
+31337 the signing key is anvil dev key #0 ï¿½ public by design; that key proves *integrity and
 publication*, never authorship, and is useless on any chain where the key is not public knowledge
 (documented in the script headers; a real release signs with a maintained key via `PRIVATE_KEY`).
 Source verification (F.3) is deliberately delegated to forge's built-in `--verify` rather than a
 hand-rolled explorer client, and cannot be executed against a real explorer from this environment
-(no API key, testnet-only scope) — the wrapper's local path is exercised end-to-end instead.
+(no API key, testnet-only scope) ï¿½ the wrapper's local path is exercised end-to-end instead.
 Verification run: build -> sign -> verify against the live rotation-#5 deployment
 (all PASS), tampered-manifest verify (FAIL, exit 1), `deploy.mjs` simulate (exit 0),
 `deploy.mjs --broadcast` (rotation #5 + manifest refresh), both smokes PASS, `npm test`,
 `npm run lint` (0 errors), `npm run build`, Playwright e2e 1 passed.
+
+## D31 - Every Router entry takes a tx deadline and (swaps/liquidity) amount bounds (B.1)
+
+**Context:** B of the A-I hardening list. A survey of every externally-callable entry found that
+*no* contract enforced a deadline (the web UI collected one but `lib/config.js` literally
+commented "the V4 router has no deadline" - it was cosmetic), the multi-hop `exactInput` had **no**
+`minAmountOut` parameter at all, and `modifyLiquidity` had neither bounds nor a deadline. A tx
+sitting in the mempool therefore executed whenever it was mined, at whatever price existed then.
+
+**Decision:** `Router.sol` - all four entries (`exactInputSingle`, `exactInputSingleWithPermit`,
+`exactInput`, `modifyLiquidity`) take an absolute `uint256 deadline`, checked by
+`_enforceDeadline` as the *first* statement of each entry (`block.timestamp > deadline` reverts
+`TransactionTooOld(deadline, block.timestamp)`) before any session state is written. `exactInput`
+gained `minAmountOut`, enforced in the unlock callback on the final hop's delta (positive side =
+final output) via the same `_enforceMinOut` used by the single-pool path (refactored to pick the
+positive delta instead of trusting a `zeroForOne` flag - identical semantics, works for both
+paths). `modifyLiquidity` gained
+`LiquidityBounds{amount0Min, amount1Min, amount0Max, amount1Max}`, sign-aware against the caller's
+*net* delta inside the unlock callback: negative (caller pays) sides must be <= Max, positive
+(caller receives) sides must be >= Min (`AmountAboveMax`/`AmountBelowMin`, currency index in the
+error). Fees accrued to the position are a separate delta and deliberately unbound - they are
+already the caller's balance and cannot be moved by a third party. `minAmountOut == 0` remains an
+explicit, documented opt-out (matches Uniswap semantics; the Quoter-parity test relies on it); a
+deadline of 0 is *not* an opt-out - it is simply always in the past.
+
+**Callers updated (breaking ABI change):** `LimitOrders.fillOrder` passes the order's signed
+`deadline` (already validated before the router call, so this is defense in depth);
+`Deploy.s.sol` seeds pass unbounded bounds + `block.timestamp + 1 hours`; the web SwapWidget
+passes `deadlineFromNow(deadlineMin)` from the slippage settings, AddLiquidity passes the typed
+amounts as Maxes, RemoveLiquidity passes `minAfterSlippage(quoted, DEFAULT_SLIPPAGE_BPS)` as Mins;
+both smoke scripts use chain time + 20 min. Router ABI regenerated; redeploy required, so this is
+**rotation #6** (all five address files + manifest).
+
+**Verification:** +9 tests in `Router.t.sol` (expired-deadline revert on each of the four entries
+with exact-arg `TransactionTooOld`, boundary `deadline == now` passes, multi-hop impossible-floor
+revert, add-above-Max / remove-below-Min reverts, in-bounds add succeeds, minOut-zero opt-out)
+=> `forge test` 197 passed; fuzz x5000 (AllowanceTransfer 31 + LimitOrders 28 - now flowing
+through the changed Router); both smokes PASS on rotation #6; e2e 1 passed; lint 0 errors;
+build ok; manifest verify PASS (signature/ancestry/settings/codehash).
+
+## D32 - Commit-reveal for large swaps: evaluated and rejected (B.2)
+
+**Context:** B.2 was marked *optional* and required an honest "what it does and does not stop"
+document either way.
+
+**Analysis:** on a public mempool, a commit-reveal scheme does not hide the trade from searchers:
+the *reveal* transaction carries the same observable parameters a plain swap would, and searchers
+see it in the mempool exactly as they would a normal tx. They can sandwich the reveal precisely
+because they can see it - the commit phase only delays the moment of visibility, it does not
+remove it. The only variants that actually hide intent require a private relay or encrypted
+mempool for the reveal, at which point the *relay* (not the commit) provides the protection. A
+commit contract also needs either escrowed funds (a new custody surface holding user money between
+commit and reveal) or a second grant to a new spender (UX + attack surface), plus bond economics
+whose only griefing target is the committer themselves. Against that cost: D31's bounds already
+revert any reveal executed at an unacceptable price, and B.3's private-orderflow guidance removes
+mempool exposure entirely on the networks where MEV matters.
+
+**Decision:** not built. Recorded here and in `docs/MEV.md` (the honest evaluation B.2 asked for)
+and `docs/CRYPTO_DECISIONS.md` (rejected-alternatives row). What stops sandwiching in this repo is
+D31 bounds + deadlines now, and private RPC submission on real networks later (B.3 docs).

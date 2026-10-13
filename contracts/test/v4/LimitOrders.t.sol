@@ -70,7 +70,11 @@ contract LimitOrdersTest is Test {
         PoolKey memory key = _key(address(tokenA), address(tokenB));
         router.initialize(key, Q96);
         router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e23}), address(this)
+            key,
+            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e23}),
+            address(this),
+            Router.LiquidityBounds(0, 0, type(uint256).max, type(uint256).max),
+            type(uint256).max
         );
     }
 

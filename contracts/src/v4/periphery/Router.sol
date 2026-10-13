@@ -20,6 +20,18 @@ contract Router is IUnlockCallback {
     ///         never needs an unlimited, never-expiring ERC-20 approval of its own.
     AllowanceTransfer public immutable at;
 
+    // ---------------------------------------------------------------- user-supplied bounds
+    /// @notice execution bounds for one `modifyLiquidity` call (B.1). The sign of each delta
+    ///         decides which fields apply: a *negative* delta (the caller pays) is checked against
+    ///         the `Max` fields, a *positive* delta (the caller receives) against the `Min` fields.
+    ///         Callers set the fields they don't use to 0 (mins) or `type(uint256).max` (maxes).
+    struct LiquidityBounds {
+        uint256 amount0Min;
+        uint256 amount1Min;
+        uint256 amount0Max;
+        uint256 amount1Max;
+    }
+
     // ---------------------------------------------------------------- per-session state
     // one operation per external call; the manager's unlock lock already forbids concurrency, so
     // plain storage is safe here (it is overwritten on every entry).
@@ -33,6 +45,7 @@ contract Router is IUnlockCallback {
     uint256 private _amountIn;
     PoolKey private _liqKey;
     ModifyLiquidityParams private _liqParams;
+    LiquidityBounds private _liqBounds;
     BalanceDelta private _swapDelta;
     BalanceDelta private _liqCallerDelta;
     BalanceDelta private _liqFees;
@@ -45,6 +58,9 @@ contract Router is IUnlockCallback {
     error PathTooShort();
     error PathCurrenciesDisjoint();
     error InsufficientOutputAmount(int256 amountOut, uint256 minAmountOut);
+    error TransactionTooOld(uint256 deadline, uint256 blockTimestamp);
+    error AmountBelowMin(uint8 currencyIndex, uint256 amount, uint256 minAmount);
+    error AmountAboveMax(uint8 currencyIndex, uint256 amount, uint256 maxAmount);
     error InsufficientPositionLiquidity(uint128 requested, uint128 available);
     error InvalidPermitSpender(address expected, address actual);
     error NativeRefundFailed();
@@ -70,11 +86,15 @@ contract Router is IUnlockCallback {
     /// @notice exact-input swap on a single pool. `sp.amountSpecified` must be > 0 (exact in).
     ///         `minAmountOut` is a slippage floor on the output (in the output currency's base
     ///         units); the whole swap reverts if the realized output is below it. Zero disables.
-    function exactInputSingle(PoolKey memory key, SwapParams memory sp, address recipient, uint256 minAmountOut)
+    ///         `deadline` is an absolute unix timestamp the tx must land by (`block.timestamp >
+    ///         deadline` reverts) — it makes a pending tx worthless after the user's chosen time,
+    ///         so a stuck order can't execute against a price the user never accepted.
+    function exactInputSingle(PoolKey memory key, SwapParams memory sp, address recipient, uint256 minAmountOut, uint256 deadline)
         external
         payable
         returns (BalanceDelta)
     {
+        _enforceDeadline(deadline);
         _payer = msg.sender;
         _recipient = recipient;
         _singleKey = key;
@@ -98,14 +118,17 @@ contract Router is IUnlockCallback {
     ///         it, and it can never turn a swap that would otherwise revert into one that
     ///         succeeds: every other failure (expired signature deadline, wrong signer, expiry,
     ///         insufficient allowance) still reverts. `permitSingle.spender` must be this router.
+    ///         `deadline` is the same tx-level bound as in `exactInputSingle`.
     function exactInputSingleWithPermit(
         PoolKey memory key,
         SwapParams memory sp,
         address recipient,
         uint256 minAmountOut,
+        uint256 deadline,
         AllowanceTransfer.PermitSingle memory permitSingle,
         bytes calldata sig
     ) external payable returns (BalanceDelta) {
+        _enforceDeadline(deadline);
         if (permitSingle.spender != address(this)) {
             revert InvalidPermitSpender(address(this), permitSingle.spender);
         }
@@ -130,16 +153,24 @@ contract Router is IUnlockCallback {
     /// @notice exact-input swap across a path of pools. The first hop sells `amountIn` of the
     ///         input token (side chosen by `zeroForOneFirst`); each later hop sells exactly the
     ///         intermediate amount the prior hop produced, so intermediate currencies net to zero
-    ///         and only the first input and last output ever move tokens.
-    function exactInput(PoolKey[] memory keys, bool zeroForOneFirst, uint256 amountIn, address recipient)
-        external
-        payable
-        returns (BalanceDelta)
-    {
+    ///         and only the first input and last output ever move tokens. `minAmountOut` bounds
+    ///         the final output and `deadline` the execution time, exactly as for a single swap
+    ///         (B.1: a multi-hop path must never execute unbounded — each hop is a new sandwich
+    ///         surface).
+    function exactInput(
+        PoolKey[] memory keys,
+        bool zeroForOneFirst,
+        uint256 amountIn,
+        address recipient,
+        uint256 minAmountOut,
+        uint256 deadline
+    ) external payable returns (BalanceDelta) {
         if (keys.length < 2) revert PathTooShort();
+        _enforceDeadline(deadline);
         _payer = msg.sender;
         _recipient = recipient;
         _op = OP_MULTI;
+        _minOut = minAmountOut;
         delete _pathKeys;
         for (uint256 i = 0; i < keys.length; i++) {
             _pathKeys.push(keys[i]);
@@ -152,15 +183,24 @@ contract Router is IUnlockCallback {
     }
 
     /// @notice add or remove liquidity in one pool (sign of `mp.liquidityDelta` selects).
-    function modifyLiquidity(PoolKey memory key, ModifyLiquidityParams memory mp, address recipient)
-        external
-        payable
-        returns (BalanceDelta callerDelta, BalanceDelta feesAccrued)
-    {
+    ///         `bounds` caps what this call may pay (add, negative deltas) or must receive (remove,
+    ///         positive deltas) per currency, and `deadline` caps execution time — the same
+    ///         sandwich/stale-tx protections swaps get (B.1). Fees accrued to the position are
+    ///         returned separately and are not bounded: they are already the caller's balance and
+    ///         cannot be moved by a third party.
+    function modifyLiquidity(
+        PoolKey memory key,
+        ModifyLiquidityParams memory mp,
+        address recipient,
+        LiquidityBounds memory bounds,
+        uint256 deadline
+    ) external payable returns (BalanceDelta callerDelta, BalanceDelta feesAccrued) {
+        _enforceDeadline(deadline);
         _payer = msg.sender;
         _recipient = recipient;
         _liqKey = key;
         _liqParams = mp;
+        _liqBounds = bounds;
         _op = OP_LIQ;
         pm.unlock("");
         _refundNative();
@@ -204,11 +244,12 @@ contract Router is IUnlockCallback {
         require(msg.sender == address(pm), "only manager");
         if (_op == OP_SINGLE) {
             _swapDelta = pm.swap(_singleKey, _singleParams);
-            _enforceMinOut(_singleParams.zeroForOne, _swapDelta, _minOut);
+            _enforceMinOut(_swapDelta, _minOut);
             _settleOrTake(_singleKey.currency0);
             _settleOrTake(_singleKey.currency1);
         } else if (_op == OP_MULTI) {
             _swapDelta = _doMulti();
+            _enforceMinOut(_swapDelta, _minOut);
             uint256 n = _pathKeys.length;
             PoolKey memory first = _pathKeys[0];
             PoolKey memory last = _pathKeys[n - 1];
@@ -218,6 +259,7 @@ contract Router is IUnlockCallback {
             _settleOrTake(last.currency1);
         } else {
             (_liqCallerDelta, _liqFees) = pm.modifyLiquidity(_liqKey, _liqParams);
+            _enforceBounds(_liqCallerDelta, _liqBounds);
             _settleOrTake(_liqKey.currency0);
             _settleOrTake(_liqKey.currency1);
         }
@@ -303,13 +345,34 @@ contract Router is IUnlockCallback {
         if (!ok) revert NativeRefundFailed();
     }
 
-    /// @dev revert if the swap's output (the positive delta in the output currency) is below
-    ///      `minOut`. A zero `minOut` disables the check. Under the caller-owes convention the
-    ///      output currency is the one with a positive delta: selling currency0 (zeroForOne)
-    ///      pays out currency1, otherwise currency0.
-    function _enforceMinOut(bool zeroForOne, BalanceDelta d, uint256 minOut) private pure {
+    /// @dev revert if `block.timestamp` is past `deadline`. Checked at the top of every state-
+    ///      mutating entry (B.1), before any session state is written.
+    function _enforceDeadline(uint256 deadline) private view {
+        if (block.timestamp > deadline) revert TransactionTooOld(deadline, block.timestamp);
+    }
+
+    /// @dev revert if the swap's output (the positive delta — the other side is what the caller
+    ///      owes) is below `minOut`. A zero `minOut` disables the check (documented opt-out: the
+    ///      caller explicitly accepts any price; a front-end should always pass a real floor).
+    ///      Used for both the single-pool path (positive side == output currency) and the multi-
+    ///      hop path (`d` is the last hop's delta, so its positive side is the final output).
+    function _enforceMinOut(BalanceDelta d, uint256 minOut) private pure {
         if (minOut == 0) return;
-        int256 out = zeroForOne ? amount1(d) : amount0(d);
+        int256 a0 = amount0(d);
+        int256 out = a0 > 0 ? a0 : amount1(d);
         if (out < 0 || uint256(out) < minOut) revert InsufficientOutputAmount(out, minOut);
+    }
+
+    /// @dev enforce `bounds` against the caller's net delta: negative (caller pays) sides must be
+    ///      at or below the Max fields, positive (caller receives) sides at or above the Min
+    ///      fields. Runs inside the unlock callback, before settlement, so a breach reverts the
+    ///      whole session.
+    function _enforceBounds(BalanceDelta d, LiquidityBounds memory bounds) private pure {
+        int256 a0 = amount0(d);
+        int256 a1 = amount1(d);
+        if (a0 < 0 && uint256(-a0) > bounds.amount0Max) revert AmountAboveMax(0, uint256(-a0), bounds.amount0Max);
+        if (a1 < 0 && uint256(-a1) > bounds.amount1Max) revert AmountAboveMax(1, uint256(-a1), bounds.amount1Max);
+        if (a0 > 0 && uint256(a0) < bounds.amount0Min) revert AmountBelowMin(0, uint256(a0), bounds.amount0Min);
+        if (a1 > 0 && uint256(a1) < bounds.amount1Min) revert AmountBelowMin(1, uint256(a1), bounds.amount1Min);
     }
 }

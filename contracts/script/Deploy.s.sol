@@ -100,10 +100,14 @@ contract Deploy is Script {
         uint256 value = lo == address(0) ? 1e20 : 0;
         ModifyLiquidityParams memory mp =
             ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e20});
+        // deployment seeding takes the price it gets (unbounded) but still respects a deadline;
+        // the bounds are user protection, and this is a scripted, non-adversarial call.
+        Router.LiquidityBounds memory bounds =
+            Router.LiquidityBounds({amount0Min: 0, amount1Min: 0, amount0Max: type(uint256).max, amount1Max: type(uint256).max});
         if (value > 0) {
-            router.modifyLiquidity{value: value}(key, mp, deployer);
+            router.modifyLiquidity{value: value}(key, mp, deployer, bounds, block.timestamp + 1 hours);
         } else {
-            router.modifyLiquidity(key, mp, deployer);
+            router.modifyLiquidity(key, mp, deployer, bounds, block.timestamp + 1 hours);
         }
     }
 }

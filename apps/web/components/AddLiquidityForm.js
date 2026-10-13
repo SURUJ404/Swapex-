@@ -10,7 +10,8 @@ import useApprove from '../hooks/useApprove'
 import useTransact from '../hooks/useTransact'
 import { buildPoolKey, isZeroForOne, getPoolState } from '../lib/pool'
 import { fullRangeLiquidityForAmounts, fullRangeTicks } from '../lib/liquidity'
-import { parseAmount, formatAmount } from '../lib/amounts'
+import { parseAmount, formatAmount, deadlineFromNow } from '../lib/amounts'
+import { DEFAULT_DEADLINE_MINUTES } from '../lib/config'
 import { NATIVE_ADDRESS } from '../constants'
 
 const Q96 = BigNumber.from(2).pow(96)
@@ -133,6 +134,10 @@ export default function AddLiquidityForm() {
     if (!account || !library || !sizing || !pool) return
     const router = new Contract(ROUTER_ADDRESS, ROUTER_ABI, library.getSigner())
     const { tickLower, tickUpper, liquidity } = sizing
+    // B.1 bounds: never pay more than the amounts entered (mins unbound — paying less is fine),
+    // and never execute after the deadline the settings chose.
+    const bound0 = aIs0 ? bnA : bnB
+    const bound1 = aIs0 ? bnB : bnA
     await run({
       label: `Add ${tokenA.symbol}/${tokenB.symbol}`,
       successMessage: `Added liquidity to ${tokenA.symbol}/${tokenB.symbol}`,
@@ -141,6 +146,8 @@ export default function AddLiquidityForm() {
           key,
           { tickLower, tickUpper, liquidityDelta: liquidity },
           account,
+          { amount0Min: 0, amount1Min: 0, amount0Max: bound0, amount1Max: bound1 },
+          deadlineFromNow(DEFAULT_DEADLINE_MINUTES),
           nativeAmount ? { value: nativeAmount } : {}
         ),
       onSuccess: () => {

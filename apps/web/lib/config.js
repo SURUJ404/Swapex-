@@ -9,7 +9,7 @@ export const CHAINS = {
 }
 
 export const DEFAULT_SLIPPAGE_BPS = 50 // 0.5%
-export const DEFAULT_DEADLINE_MINUTES = 20 // retained for display; the V4 router has no deadline
+export const DEFAULT_DEADLINE_MINUTES = 20 // tx deadline, enforced on-chain by the Router since B.1
 export const MAX_SLIPPAGE_BPS = 5000 // hard cap 50%
 export const HIGH_SLIPPAGE_BPS = 500 // warn above 5%
 export const LOW_SLIPPAGE_BPS = 5 // warn below 0.05% (likely to fail)

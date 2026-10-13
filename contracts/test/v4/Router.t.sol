@@ -53,9 +53,19 @@ contract RouterTest is Test {
         return PoolKey({currency0: currency.wrap(lo), currency1: currency.wrap(hi), fee: 3000, tickSpacing: 60, hooks: address(0)});
     }
 
+    // B.1: every router entry now takes a tx deadline and (for liquidity) amount bounds. These
+    // legacy tests exercise settlement, not bound enforcement, so they pass an effectively
+    // infinite deadline and no bounds; the bounds/deadline enforcement itself is covered in
+    // test_exactInputSingle_revertsAfterDeadline and below.
+    uint256 internal constant FAR_DEADLINE = type(uint256).max;
+
+    function _unbounded() internal pure returns (Router.LiquidityBounds memory) {
+        return Router.LiquidityBounds({amount0Min: 0, amount1Min: 0, amount0Max: type(uint256).max, amount1Max: type(uint256).max});
+    }
+
     function _seed(PoolKey memory key) internal {
         router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e20}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e20}), address(this), _unbounded(), FAR_DEADLINE
         );
     }
 
@@ -76,7 +86,8 @@ contract RouterTest is Test {
                 sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1
             }),
             address(this),
-            0
+             0,
+             FAR_DEADLINE
         );
 
         assertLt(tokenA.balanceOf(address(this)), aBefore, "spent input tokenA");
@@ -100,7 +111,7 @@ contract RouterTest is Test {
         uint256 bBefore = tokenB.balanceOf(address(this));
         uint256 cBefore = tokenC.balanceOf(address(this));
 
-        router.exactInput(path, zeroForOneFirst, 1e18, address(this));
+        router.exactInput(path, zeroForOneFirst, 1e18, address(this), 0, FAR_DEADLINE);
 
         assertLt(tokenA.balanceOf(address(this)), aBefore, "spent tokenA");
         assertGt(tokenC.balanceOf(address(this)), cBefore, "received tokenC");
@@ -114,7 +125,7 @@ contract RouterTest is Test {
         router.initialize(key, Q96);
 
         (BalanceDelta cdAdd,) = router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this), _unbounded(), FAR_DEADLINE
         );
         assertLt(amount0(cdAdd), 0, "owes token0 on add");
         assertLt(amount1(cdAdd), 0, "owes token1 on add");
@@ -122,7 +133,7 @@ contract RouterTest is Test {
 
         uint256 ethOrToken0Before = token0Balance(key);
         (BalanceDelta cdRem,) = router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -1e18}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -1e18}), address(this), _unbounded(), FAR_DEADLINE
         );
         assertGt(amount0(cdRem), 0, "owed token0 on remove");
         uint256 returned0 = uint256(amount0(cdRem));
@@ -144,7 +155,7 @@ contract RouterTest is Test {
         router.initialize(key, Q96);
         // seed liquidity, providing native ETH (msg.value) + tokenB
         router.modifyLiquidity{value: 10_000e18}(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this), _unbounded(), FAR_DEADLINE
         );
 
         uint256 bBefore = tokenB.balanceOf(address(this));
@@ -153,7 +164,8 @@ contract RouterTest is Test {
             key,
             SwapParams({zeroForOne: true, amountSpecified: 1e18, sqrtPriceLimitX96: TickMath.MIN_SQRT_RATIO + 1}),
             address(this),
-            0
+             0,
+             FAR_DEADLINE
         );
         assertGt(tokenB.balanceOf(address(this)), bBefore, "received tokenB for native input");
     }
@@ -168,7 +180,7 @@ contract RouterTest is Test {
         });
         router.initialize(key, Q96);
         router.modifyLiquidity{value: 10_000e18}(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this), _unbounded(), FAR_DEADLINE
         );
 
         uint256 walletBefore = address(this).balance;
@@ -179,7 +191,8 @@ contract RouterTest is Test {
             key,
             SwapParams({zeroForOne: true, amountSpecified: 1e18, sqrtPriceLimitX96: TickMath.MIN_SQRT_RATIO + 1}),
             address(this),
-            0
+            0,
+            FAR_DEADLINE
         );
         uint256 consumed = uint256(-amount0(d));
         assertLt(consumed, 2e18, "swap did not need all of msg.value");
@@ -198,7 +211,7 @@ contract RouterTest is Test {
         });
         router.initialize(key, Q96);
         router.modifyLiquidity{value: 10_000e18}(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this), _unbounded(), FAR_DEADLINE
         );
 
         uint256 walletBefore = address(this).balance;
@@ -213,7 +226,8 @@ contract RouterTest is Test {
                 sqrtPriceLimitX96: TickMath.getSqrtRatioAtTick(-60)
             }),
             address(this),
-            0
+            0,
+            FAR_DEADLINE
         );
         uint256 consumed = uint256(-amount0(d));
         assertLt(consumed, 1e18, "price limit stopped the fill early");
@@ -238,7 +252,7 @@ contract RouterTest is Test {
                 sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1
             }),
             address(this),
-            type(uint128).max
+            type(uint128).max, FAR_DEADLINE
         );
     }
 
@@ -251,12 +265,12 @@ contract RouterTest is Test {
         router.initialize(key, Q96);
 
         router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this), _unbounded(), FAR_DEADLINE
         );
         assertEq(router.getPositionLiquidity(address(this), key, -6000, 6000), 1e18, "add credited");
 
         router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -4e17}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -4e17}), address(this), _unbounded(), FAR_DEADLINE
         );
         assertEq(router.getPositionLiquidity(address(this), key, -6000, 6000), 6e17, "remove debited");
     }
@@ -266,12 +280,12 @@ contract RouterTest is Test {
         router.initialize(key, Q96);
 
         router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}), address(this), _unbounded(), FAR_DEADLINE
         );
         // the user only owns 1e18; asking for more must revert so they can't spend another's share
         vm.expectRevert();
         router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -2e18}), address(this)
+            key, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -2e18}), address(this), _unbounded(), FAR_DEADLINE
         );
     }
 
@@ -284,12 +298,12 @@ contract RouterTest is Test {
 
         uint128 liq = 5e17;
         router.modifyLiquidity{value: 1e18}(
-            key, ModifyLiquidityParams({tickLower: lo, tickUpper: hi, liquidityDelta: int256(uint256(liq))}), address(this)
+            key, ModifyLiquidityParams({tickLower: lo, tickUpper: hi, liquidityDelta: int256(uint256(liq))}), address(this), _unbounded(), FAR_DEADLINE
         );
         assertEq(router.getPositionLiquidity(address(this), key, lo, hi), liq, "registry credited");
 
         (BalanceDelta cd,) = router.modifyLiquidity(
-            key, ModifyLiquidityParams({tickLower: lo, tickUpper: hi, liquidityDelta: -int256(uint256(liq))}), address(this)
+            key, ModifyLiquidityParams({tickLower: lo, tickUpper: hi, liquidityDelta: -int256(uint256(liq))}), address(this), _unbounded(), FAR_DEADLINE
         );
         assertGt(amount1(cd), 0, "got tokenB back");
         assertEq(router.getPositionLiquidity(address(this), key, lo, hi), 0, "registry cleared");
@@ -343,7 +357,7 @@ contract RouterTest is Test {
         // allowance the front-run already created instead of dying on a replay of the grant.
         uint256 outBefore = MockERC20(output).balanceOf(alice);
         vm.prank(alice);
-        router.exactInputSingleWithPermit(key, sp, alice, 0, p, sig);
+        router.exactInputSingleWithPermit(key, sp, alice, 0, FAR_DEADLINE, p, sig);
 
         assertGt(MockERC20(output).balanceOf(alice), outBefore, "swap settled despite the front-run");
     }
@@ -387,6 +401,203 @@ contract RouterTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Router.InvalidPermitSpender.selector, address(router), p.spender));
-        router.exactInputSingleWithPermit(key, sp, alice, 0, p, sig);
+        router.exactInputSingleWithPermit(key, sp, alice, 0, FAR_DEADLINE, p, sig);
+    }
+
+    // ---------------------------------------------------------------- B.1: bound enforcement
+    // Every externally-callable swap/liquidity entry must refuse to execute outside its deadline
+    // and (where the entry has one) outside its amount bounds: a mempool tx that is only mined
+    // later must not run against a price the user never accepted.
+
+    function _swapParams() internal pure returns (SwapParams memory sp) {
+        // sell currency0 for currency1 — valid for any pool in this suite
+        sp = SwapParams({
+            zeroForOne: true,
+            amountSpecified: 1e18,
+            sqrtPriceLimitX96: TickMath.MIN_SQRT_RATIO + 1
+        });
+    }
+
+    function test_deadline_exactInputSingle_revertsWhenPastDeadline() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+        _seed(key);
+        SwapParams memory sp = _swapParams();
+        uint256 deadline = block.timestamp + 10;
+
+        // boundary: a deadline equal to the current timestamp is still valid
+        router.exactInputSingle(key, sp, address(this), 0, deadline);
+
+        vm.warp(deadline + 1);
+        vm.expectRevert(abi.encodeWithSelector(Router.TransactionTooOld.selector, deadline, deadline + 1));
+        router.exactInputSingle(key, sp, address(this), 0, deadline);
+    }
+
+    function test_deadline_exactInput_revertsWhenPastDeadline() public {
+        PoolKey memory keyAB = _key(address(tokenA), address(tokenB));
+        PoolKey memory keyBC = _key(address(tokenB), address(tokenC));
+        router.initialize(keyAB, Q96);
+        router.initialize(keyBC, Q96);
+        _seed(keyAB);
+        _seed(keyBC);
+
+        PoolKey[] memory path = new PoolKey[](2);
+        path[0] = keyAB;
+        path[1] = keyBC;
+        bool zeroForOneFirst = currency.unwrap(keyAB.currency0) == address(tokenA);
+        uint256 deadline = block.timestamp + 10;
+
+        router.exactInput(path, zeroForOneFirst, 1e18, address(this), 0, deadline);
+
+        vm.warp(deadline + 1);
+        vm.expectRevert(abi.encodeWithSelector(Router.TransactionTooOld.selector, deadline, deadline + 1));
+        router.exactInput(path, zeroForOneFirst, 1e18, address(this), 0, deadline);
+    }
+
+    function test_deadline_modifyLiquidity_revertsWhenPastDeadline() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+        uint256 deadline = block.timestamp + 10;
+
+        router.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}),
+            address(this),
+            _unbounded(),
+            deadline
+        );
+
+        vm.warp(deadline + 1);
+        vm.expectRevert(abi.encodeWithSelector(Router.TransactionTooOld.selector, deadline, deadline + 1));
+        router.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}),
+            address(this),
+            _unbounded(),
+            deadline
+        );
+    }
+
+    function test_deadline_exactInputSingleWithPermit_revertsWhenPastDeadline() public {
+        uint256 pk = 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d;
+        address alice = vm.addr(pk);
+        tokenA.mint(alice, 1_000e18);
+        vm.startPrank(alice);
+        tokenA.approve(address(at), type(uint256).max);
+        vm.stopPrank();
+
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+        _seed(key);
+
+        bool zeroForOne = currency.unwrap(key.currency0) == address(tokenA);
+        address input = currency.unwrap(zeroForOne ? key.currency0 : key.currency1);
+        SwapParams memory sp = SwapParams({
+            zeroForOne: zeroForOne,
+            amountSpecified: 1e18,
+            sqrtPriceLimitX96: zeroForOne ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1
+        });
+        AllowanceTransfer.PermitSingle memory p = AllowanceTransfer.PermitSingle({
+            details: AllowanceTransfer.PermitDetails({
+                token: input,
+                amount: 1e18,
+                expiration: uint48(block.timestamp + 1 days),
+                nonce: 0
+            }),
+            spender: address(router),
+            sigDeadline: block.timestamp + 1 hours
+        });
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, at.hashPermitSingle(p));
+        bytes memory sig = abi.encodePacked(r, s, v);
+
+        uint256 deadline = block.timestamp + 10;
+        vm.warp(deadline + 1);
+        // the deadline is checked first: even a perfectly valid permit cannot reschedule the swap
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Router.TransactionTooOld.selector, deadline, deadline + 1));
+        router.exactInputSingleWithPermit(key, sp, alice, 0, deadline, p, sig);
+    }
+
+    function test_exactInput_minOut_revertsOnMultiHopPath() public {
+        PoolKey memory keyAB = _key(address(tokenA), address(tokenB));
+        PoolKey memory keyBC = _key(address(tokenB), address(tokenC));
+        router.initialize(keyAB, Q96);
+        router.initialize(keyBC, Q96);
+        _seed(keyAB);
+        _seed(keyBC);
+
+        PoolKey[] memory path = new PoolKey[](2);
+        path[0] = keyAB;
+        path[1] = keyBC;
+        bool zeroForOneFirst = currency.unwrap(keyAB.currency0) == address(tokenA);
+
+        // an impossible floor on the *final* output: the multi-hop path must not execute unbounded
+        vm.expectPartialRevert(Router.InsufficientOutputAmount.selector);
+        router.exactInput(path, zeroForOneFirst, 1e18, address(this), type(uint128).max, FAR_DEADLINE);
+
+        // a reachable floor settles
+        uint256 cBefore = tokenC.balanceOf(address(this));
+        router.exactInput(path, zeroForOneFirst, 1e18, address(this), 1, FAR_DEADLINE);
+        assertGt(tokenC.balanceOf(address(this)), cBefore, "bounded multi-hop settled");
+    }
+
+    function test_modifyLiquidity_add_revertsWhenAboveAmountMax() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+        _seed(key);
+
+        // the caller is willing to pay at most 1 wei of currency0: a full-range add needs far
+        // more, so the deposit must be refused rather than silently filled at any price.
+        vm.expectPartialRevert(Router.AmountAboveMax.selector);
+        router.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}),
+            address(this),
+            Router.LiquidityBounds({amount0Min: 0, amount1Min: 0, amount0Max: 1, amount1Max: type(uint256).max}),
+            FAR_DEADLINE
+        );
+    }
+
+    function test_modifyLiquidity_remove_revertsWhenBelowAmountMin() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+        _seed(key);
+
+        // demand far more currency0 back than the position is worth: a removal that would land
+        // below the signed floor must not settle at the manipulated price.
+        vm.expectPartialRevert(Router.AmountBelowMin.selector);
+        router.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: -1e18}),
+            address(this),
+            Router.LiquidityBounds({amount0Min: type(uint128).max, amount1Min: 0, amount0Max: type(uint256).max, amount1Max: type(uint256).max}),
+            FAR_DEADLINE
+        );
+    }
+
+    function test_modifyLiquidity_addWithinMax_succeeds() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+        _seed(key);
+
+        // generous but finite maxes: a deposit within the caller's tolerance still settles
+        router.modifyLiquidity(
+            key,
+            ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e18}),
+            address(this),
+            Router.LiquidityBounds({amount0Min: 0, amount1Min: 0, amount0Max: type(uint128).max, amount1Max: type(uint128).max}),
+            FAR_DEADLINE
+        );
+        assertGt(router.getPositionLiquidity(address(this), key, -6000, 6000), 1e18, "add within bounds credited");
+    }
+
+    function test_exactInputSingle_minOutZero_isAllowedOptOut() public {
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        router.initialize(key, Q96);
+        _seed(key);
+        SwapParams memory sp = _swapParams();
+        // documented semantics: minAmountOut == 0 explicitly accepts any price (the check is
+        // skipped). Real front-ends must always pass a floor; the deadline still applies.
+        router.exactInputSingle(key, sp, address(this), 0, FAR_DEADLINE);
     }
 }
