@@ -5,6 +5,7 @@ import {V3Base} from "./V3Base.t.sol";
 import {SwapexPool} from "../../src/v3/SwapexPool.sol";
 import {SwapexFactory} from "../../src/v3/SwapexFactory.sol";
 import {TickMath} from "../../src/libraries/TickMath.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract V3PoolTest is V3Base {
     int24 internal constant LOWER = -120;
@@ -42,7 +43,7 @@ contract V3PoolTest is V3Base {
         factory.enableFeeAmount(100, 1);
         assertEq(int256(factory.feeAmountTickSpacing(100)), 1);
         vm.prank(address(0xBEEF));
-        vm.expectRevert(SwapexFactory.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xBEEF)));
         factory.enableFeeAmount(200, 5);
         vm.expectRevert(SwapexFactory.FeeAlreadyEnabled.selector);
         factory.enableFeeAmount(100, 1);
@@ -50,11 +51,23 @@ contract V3PoolTest is V3Base {
         factory.enableFeeAmount(300, 16384);
     }
 
-    function test_factory_setOwnerRevertsOnZeroAddress() public {
-        // regression: transferring ownership to the zero address would brick the factory
-        vm.expectRevert(SwapexFactory.ZeroAddress.selector);
-        factory.setOwner(address(0));
-        factory.setOwner(address(0xBEEF));
+    function test_factory_transferOwnershipIsTwoStepAndZeroSafe() public {
+        // OZ v5 two-step: transferOwnership(0) merely cancels a pending transfer (documented
+        // behaviour) — the owner never changes and address(0) can never accept, so ownership
+        // cannot be bricked by a zero-address transfer.
+        factory.transferOwnership(address(0xBEEF));
+        factory.transferOwnership(address(0));
+        assertEq(factory.owner(), address(this), "owner unchanged by the zero transfer");
+        assertEq(factory.pendingOwner(), address(0), "pending cleared");
+        vm.prank(address(0xBEEF));
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xBEEF))
+        );
+        factory.acceptOwnership(); // stale pending owner cannot accept
+        // a standing transfer completes only when its pending owner accepts
+        factory.transferOwnership(address(0xBEEF));
+        vm.prank(address(0xBEEF));
+        factory.acceptOwnership();
         assertEq(factory.owner(), address(0xBEEF));
     }
 

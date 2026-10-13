@@ -20,7 +20,23 @@ and nothing should be until the audit checklist at the bottom is closed.
 * Anything mainnet-bound must move to a hardware wallet or KMS/HSM with a policy — never a
   plaintext key file, never in CI.
 
-## 3. Dependency pinning
+## 3. Admin ownership (two-step + timelock)
+
+* `PoolManager` and `SwapexFactory` use OpenZeppelin `Ownable2Step` with an explicit initial
+  owner (D29): a transfer only *names* a pending owner until that owner calls
+  `acceptOwnership()`, so a mistyped transfer can never strand either contract, and no input can
+  produce a zero-address owner.
+* The deployed `PoolManager` is owned by a `TimelockController` with a **2-day delay**. The
+  privileged actions — `setProtocolFee`, `collectProtocol`, `enableFeeAmount` — are therefore
+  scheduled, delayed and cancellable (`cancel`) before they can execute; direct calls from any
+  address other than the timelock itself revert.
+* **Local anvil:** the deployer (anvil account #0, a publicly known key) is the timelock's
+  proposer, executor and admin — fine only because the chain holds no value.
+* **Any shared testnet / pre-mainnet:** the timelock's admin, proposer roles must be a **multisig**
+  (e.g. Safe), and the deployer must renounce `DEFAULT_ADMIN_ROLE` on the timelock after setup.
+  An EOA-only timelock admin collapses the delay guarantee back to a single key.
+
+## 4. Dependency pinning
 
 `contracts/lib/` is git-ignored, so CI installs every dependency fresh **by explicit tag**:
 
@@ -31,7 +47,7 @@ forge install OpenZeppelin/openzeppelin-contracts@v5.2.0 --no-git
 
 Signature/nonce code is **not written by hand** — see [`docs/CRYPTO_DECISIONS.md`](./CRYPTO_DECISIONS.md).
 
-## 4. Contracts that cannot be trusted as deployed
+## 5. Contracts that cannot be trusted as deployed
 
 * `PoolManager` exceeds the EIP-170 size limit (24,576 bytes) and is deployed locally with
   `anvil --code-size-limit 131072`. This is a known, documented deviation — CI warns rather than
@@ -39,21 +55,23 @@ Signature/nonce code is **not written by hand** — see [`docs/CRYPTO_DECISIONS.
 * Optimizer `runs = 800` trades a little runtime gas for size; changing it changes deployed bytecode
   and invalidates recorded init-code hashes.
 
-## 5. Before any mainnet deployment (checklist)
+## 6. Before any mainnet deployment (checklist)
 
 1. Resolve the EIP-170 size violation (split/upgrade path), not the size-gate waiver.
 2. Fix or formally justify every Slither/Aderyn finding in `contracts/docs/SECURITY.md`.
 3. Close the fee-attribution limitation recorded in `contracts/docs/DECISIONS.md` (D26) with a real
    per-user `PositionManager`, or ship without pooled fee accounting.
-4. External audit of `PoolManager` + `Router` + `AllowanceTransfer`.
+4. External audit of `PoolManager` + `Router` + `AllowanceTransfer` + `LimitOrders`.
 5. Permanently remove all `Mock*` deployment paths and open `mint`s.
-6. Re-run `forge test` (with the 5000-run signature fuzz), `npm test`, and the Playwright
+6. Point the timelock at a multisig admin/proposer and renounce the deployer's timelock roles
+   (section 3) — verify `PoolManager.owner()` is the timelock before anything else ships.
+7. Re-run `forge test` (with the 5000-run signature fuzz), `npm test`, and the Playwright
    typed-data sign tests against the **actual** target chain — replay and wrong-chain signatures must
    fail there too.
-7. A secrets scan of the full history, and confirmation that no deployer key is recoverable from the
+8. A secrets scan of the full history, and confirmation that no deployer key is recoverable from the
    repository.
 
-## 6. Incident contact
+## 7. Incident contact
 
 Security reports go to the repository's issue tracker (this project is a public testnet demo).
 Do not include exploit details for systems that hold real funds — there are none yet.

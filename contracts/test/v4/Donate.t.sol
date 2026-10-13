@@ -86,7 +86,7 @@ contract DonateTest is Test {
     PoolKey key;
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         router = new DonateRouter(pm);
         tokenA = new MockERC20("A", "A", 18);
         tokenB = new MockERC20("B", "B", 18);

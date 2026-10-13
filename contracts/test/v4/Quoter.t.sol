@@ -22,7 +22,7 @@ contract QuoterTest is Test {
     MockERC20 tokenB;
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         at = new AllowanceTransfer();
         router = new Router(pm, at);
         quoter = new Quoter(pm);

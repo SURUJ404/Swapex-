@@ -2,9 +2,11 @@
 pragma solidity ^0.8.26;
 
 import {Script, console} from "forge-std/Script.sol";
+import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
 import {PoolManager, ModifyLiquidityParams} from "../src/v4/PoolManager.sol";
 import {Router} from "../src/v4/periphery/Router.sol";
 import {AllowanceTransfer} from "../src/v4/periphery/AllowanceTransfer.sol";
+import {LimitOrders} from "../src/v4/periphery/LimitOrders.sol";
 import {Quoter} from "../src/v4/periphery/Quoter.sol";
 import {currency} from "../src/v4/types/Currency.sol";
 import {PoolKey} from "../src/v4/types/PoolKey.sol";
@@ -12,7 +14,8 @@ import {MockERC20} from "../test/mocks/MockERC20.sol";
 
 uint160 constant Q96 = uint160(1 << 96);
 
-/// @notice Local-dev deploy: spins up the Swapex V4 core + periphery, three 18-decimal mock
+/// @notice Local-dev deploy: spins up the Swapex V4 core + periphery, the A.3 LimitOrders
+///         contract, an F.1 TimelockController (the PoolManager's owner), three 18-decimal mock
 ///         tokens, and a handful of 1:1 pools seeded with liquidity so the frontend has live,
 ///         tradeable markets on a fresh anvil node. Logs every address as `KEY=0x...` so a
 ///         script can parse them straight into the web app's config.
@@ -27,10 +30,19 @@ contract Deploy is Script {
         deployer = vm.addr(pk);
         vm.startBroadcast(pk);
 
-        PoolManager pm = new PoolManager();
+        // F.1: the timelock must exist before the PoolManager so it can be the constructor's
+        // initial owner (2-step ownership means the manager is never in a pending-owner state).
+        // 2-day delay; the deployer is proposer + executor + admin for local dev — a real
+        // deployment replaces it with a multisig and renounces the admin role (D29).
+        address[] memory members = new address[](1);
+        members[0] = deployer;
+        TimelockController timelock = new TimelockController(2 days, members, members, deployer);
+
+        PoolManager pm = new PoolManager(address(timelock));
         AllowanceTransfer at = new AllowanceTransfer();
         Router router = new Router(pm, at);
         Quoter quoter = new Quoter(pm);
+        LimitOrders limitOrders = new LimitOrders(router, at);
 
         MockERC20 swa = new MockERC20("Swapex A", "SWA", 18);
         MockERC20 swb = new MockERC20("Swapex B", "SWB", 18);
@@ -62,6 +74,8 @@ contract Deploy is Script {
         console.log("ALLOWANCE_TRANSFER=%s", address(at));
         console.log("ROUTER=%s", address(router));
         console.log("QUOTER=%s", address(quoter));
+        console.log("LIMIT_ORDERS=%s", address(limitOrders));
+        console.log("TIMELOCK=%s", address(timelock));
         console.log("SWA=%s", address(swa));
         console.log("SWB=%s", address(swb));
         console.log("SWC=%s", address(swc));

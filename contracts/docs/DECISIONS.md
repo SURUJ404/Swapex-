@@ -301,3 +301,31 @@ recorded web addresses were rotated once more. Tests:
 `test_permit_expiredSignatureDeadline_reverts` (past signed deadline â†’ `SignatureExpired`) and
 `test_permit_submitterCannotExtendTheSignedDeadline_reverts` (deadline extended by the submitter â†’
 `InvalidSignature`, because the digest changed).
+
+
+## D29 — Two-step ownership on both core contracts, with the PoolManager owned by an OpenZeppelin `TimelockController`
+**Decision:** `PoolManager` and `SwapexFactory` now inherit OpenZeppelin `Ownable2Step` with an
+explicit `constructor(address initialOwner)`; the custom `owner`/`onlyOwner`/`NotOwner`,
+`setOwner` and `OwnerChanged` code is deleted in favour of OZ's `OwnableUnauthorizedAccount` /
+`OwnableInvalidOwner` and `OwnershipTransferred`/`OwnershipTransferStarted`. `Deploy.s.sol`
+deploys a `TimelockController(2 days, proposers=[deployer], executors=[deployer], admin=deployer)`
+*first* and passes it as the manager's initial owner, so the owner is the timelock from genesis —
+never a pending-transfer state. `LimitOrders` is also deployed there now. The remaining privileged
+actions are `PoolManager.setProtocolFee`/`collectProtocol` and `SwapexFactory.enableFeeAmount`;
+the multisig — not the deployer — is documented as the timelock's final admin/owner for any real
+deployment (testnet keeps the anvil deployer for operability; see `docs/TESTNET_SECURITY.md`).
+**Rationale:** One-step `setOwner` meant a single signed transaction could move protocol-fee
+admin to any address (including one with no key) with no confirmation step, and an EOA owner
+made fee changes instantaneous and uncancellable. `Ownable2Step` removes the stranded-owner class
+of bug outright (OZ v5 even allows `transferOwnership(address(0))` to *cancel* a pending transfer,
+so no input can brick ownership), and the timelock makes every admin change delayed and
+cancellable by role — the concrete threat being a compromised admin key able to redirect protocol
+fees (or a hostile fee tier) before anyone can react. `new PoolManager(address(timelock))` instead
+of constructor-then-`transferOwnership` was required precisely because two-step transfer would
+have left the manager pending-owner for the whole delay; passing the owner at construction keeps
+the invariant "owner is either correct or the contract does not exist". Deploying the timelock
+first shifts every subsequent `CREATE` address (rotation #4). Verification: `forge test` 188/188
+(new `test/Admin.t.sol`: two-step accept/zero-cancels-pending, direct admin calls rejected,
+early execute reverts, post-delay execute applies, sub-min-delay schedule reverts, cancellation
+kills a queued op), plus an on-chain read after `--broadcast`: `pm.owner() == timelock`,
+`pendingOwner == 0`, `getMinDelay == 2 days`.

@@ -133,7 +133,7 @@ def main():
     w("    bool zeroForOneIsA;")
     w("")
     w("    function setUp() public {")
-    w("        pm = new PoolManager();")
+    w("        pm = new PoolManager(address(this));")
     w("        router = new V4Router(pm);")
     w("        tokenA = new MockERC20(\"A\", \"A\", 18);")
     w("        tokenB = new MockERC20(\"B\", \"B\", 18);")

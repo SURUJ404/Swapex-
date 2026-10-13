@@ -26,7 +26,7 @@ abstract contract QuirksBase is Test, ISwapexMintCallback, ISwapexSwapCallback, 
     address internal token1; // higher address
 
     function setUp() public virtual {
-        factory = new SwapexFactory();
+        factory = new SwapexFactory(address(this));
     }
 
     function _sortAndSet(address a, address b) internal {

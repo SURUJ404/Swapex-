@@ -23,7 +23,7 @@ abstract contract V3Base is Test, ISwapexMintCallback, ISwapexSwapCallback, ISwa
     uint256 internal flashExtra;
 
     function setUp() public virtual {
-        factory = new SwapexFactory();
+        factory = new SwapexFactory(address(this));
 
         MockERC20 a = new MockERC20("Token A", "TKA", 18);
         MockERC20 b = new MockERC20("Token B", "TKB", 18);

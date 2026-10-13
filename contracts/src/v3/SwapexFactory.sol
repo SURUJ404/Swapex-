@@ -2,10 +2,16 @@
 pragma solidity ^0.8.26;
 
 import {SwapexPool} from "./SwapexPool.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /// Deploys one SwapexPool per (token0, token1, fee) at a deterministic CREATE2 address.
-contract SwapexFactory {
-    error NotOwner();
+/// @dev Ownership follows OpenZeppelin's two-step transfer (F.1): `transferOwnership` only names a
+///      *pending* owner, who must `acceptOwnership()` — a mis-sent transfer can never strand the
+///      factory under an unreachable owner, and the eventual owner is intended to be a
+///      TimelockController (see docs/DECISIONS.md D29), with a multisig as the timelock's final
+///      admin.
+contract SwapexFactory is Ownable2Step {
     error IdenticalTokens();
     error ZeroAddress();
     error FeeNotEnabled();
@@ -14,7 +20,6 @@ contract SwapexFactory {
     error InvalidTickSpacing();
     error FeeAlreadyEnabled();
 
-    event OwnerChanged(address indexed oldOwner, address indexed newOwner);
     event PoolCreated(address indexed token0, address indexed token1, uint24 indexed fee, int24 tickSpacing, address pool);
     event FeeAmountEnabled(uint24 indexed fee, int24 indexed tickSpacing);
 
@@ -26,24 +31,16 @@ contract SwapexFactory {
         int24 tickSpacing;
     }
 
-    address public owner;
     mapping(uint24 => int24) public feeAmountTickSpacing;
     mapping(address => mapping(address => mapping(uint24 => address))) public getPool;
 
     /// @dev set only during pool creation; the pool reads it in its constructor
     Parameters public parameters;
 
-    constructor() {
-        owner = msg.sender;
-        emit OwnerChanged(address(0), msg.sender);
+    constructor(address initialOwner) Ownable(initialOwner) {
         _enable(500, 10);
         _enable(3000, 60);
         _enable(10000, 200);
-    }
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
     }
 
     function createPool(address tokenA, address tokenB, uint24 fee) external returns (address pool) {
@@ -71,12 +68,8 @@ contract SwapexFactory {
         return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, initCodeHash)))));
     }
 
-    function setOwner(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert ZeroAddress();
-        emit OwnerChanged(owner, newOwner);
-        owner = newOwner;
-    }
-
+    /// @notice enable a new (fee, tickSpacing) pair. Owner-only — in a deployment the owner is
+    ///         the timelock, so this becomes a delayed, cancellable governance action.
     function enableFeeAmount(uint24 fee, int24 tickSpacing) external onlyOwner {
         _enable(fee, tickSpacing);
     }

@@ -15,6 +15,8 @@ import {BalanceDelta, toBalanceDelta, amount0, amount1} from "./types/BalanceDel
 import {PoolKey, PoolId, toPoolId} from "./types/PoolKey.sol";
 import {Hooks} from "./libraries/Hooks.sol";
 import {IHooks} from "./interfaces/IHooks.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 /// @notice Called back inside `unlock` so the caller can settle/take against accumulated deltas.
 interface IUnlockCallback {
@@ -44,7 +46,11 @@ struct ModifyLiquidityParams {
 ///      net out and move no tokens until the end. Native currency (address(0)) is a first-class
 ///      currency: settle accepts ETH via msg.value and take sends it. Hooks and protocol fee are
 ///      Phase 3 scope.
-contract PoolManager {
+/// @dev Ownership follows OpenZeppelin's two-step transfer (F.1): protocol-fee admin
+///      (`setProtocolFee`, `collectProtocol`) is `onlyOwner`, the owner is set at construction,
+///      and a real deployment hands it to a TimelockController (docs/DECISIONS.md D29) so admin
+///      actions are delayed and cancellable.
+contract PoolManager is Ownable2Step {
     using Tick for mapping(int24 => Tick.Info);
     using TickBitmap for mapping(int16 => uint256);
     using Position for mapping(bytes32 => Position.Info);
@@ -70,7 +76,6 @@ contract PoolManager {
     error NativeSettleAmountMismatch();
     error UnexpectedEth();
     error LiquidityDeltaOverflow();
-    error NotOwner();
     error InvalidProtocolFee();
     error NoLiquidityToAccrue();
     error InsufficientClaim();
@@ -112,20 +117,10 @@ contract PoolManager {
     /// @notice tokens actually held by the manager per currency (mirrors its ERC-20 balance).
     mapping(currency => uint256) public reserves;
 
-    /// @notice the only account that may set protocol fees and collect them.
-    address public owner;
-
     /// @dev protocolFee is expressed in 1e6 units; 1e6 means the protocol takes the entire lp fee.
     uint24 public constant PROTOCOL_FEE_DENOMINATOR = 1_000_000;
 
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
-    }
-
-    constructor() {
-        owner = msg.sender;
-    }
+    constructor(address initialOwner) Ownable(initialOwner) {}
 
     // ---------------------------------------------------------------- flash accounting
     /// @dev solc 0.8.26 supports only transient *value* types, not mappings, so the per-currency

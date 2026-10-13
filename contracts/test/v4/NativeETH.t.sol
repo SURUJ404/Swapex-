@@ -102,7 +102,7 @@ contract NativeETHTest is Test {
     receive() external payable {}
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         router = new NativeRouter(pm);
         tokenB = new MockERC20("B", "B", 18);
         native = ADDRESS_ZERO();

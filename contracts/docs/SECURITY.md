@@ -15,7 +15,7 @@ Tools run against `src/` (production contracts only; `test/`, `lib/`, `reference
 
 | Detector | Location | Action |
 |---|---|---|
-| `missing-zero-check` | `SwapexFactory.setOwner` (`src/v3/SwapexFactory.sol:74`) | **Fixed.** `setOwner(address(0))` would silently renounce ownership to an unowned state that can never be recovered (the `onlyOwner` modifier can never pass again). Added `if (newOwner == address(0)) revert ZeroAddress();` plus regression test `test_factory_setOwnerRevertsOnZeroAddress`. |
+| `missing-zero-check` | `SwapexFactory.setOwner` (`src/v3/SwapexFactory.sol:74`) | **Superseded by F.1 (D29).** The original issue (`setOwner(address(0))` bricking the factory) was first patched with an explicit zero check; `setOwner` has since been **removed entirely** in favour of OpenZeppelin `Ownable2Step`, where `transferOwnership(0)` merely cancels a pending transfer and `address(0)` can never accept — the brick case is structurally impossible. Regression tests: `test_factory_transferOwnershipIsTwoStepAndZeroSafe`, `test_ownership_zeroAddressCannotBecomeOwner`. |
 
 ### Accepted — protected by the `lock` reentrancy guard
 
@@ -230,7 +230,7 @@ adjudicated in Phase 5. The one genuine finding (**H-2**) is fixed.
 
 | Finding | Where | Verdict |
 |---|---|---|
-| L-1 centralization (4) | `SwapexFactory.setOwner/enableFeeAmount`, `PoolManager.setProtocolFee` | admin roles are intentional; testnet-only, keys documented in `docs/TESTNET_SECURITY.md` |
+| L-1 centralization (3) | `SwapexFactory.enableFeeAmount`, `PoolManager.setProtocolFee/collectProtocol` | `setOwner` no longer exists (F.1: two-step + `TimelockController`, D29) — admin calls are delayed and cancellable; testnet keys and the multisig-handover rule documented in `docs/TESTNET_SECURITY.md` §3 |
 | L-2 costly op in loop (4) | `SwapexPool:327`, `PoolManager:190/370`, `Router:142` | loops are O(touched currencies) / O(path length), bounded by caller-paid gas; the sweep is the net-zero check (D14) |
 | L-3 empty block (1) | `DynamicFeeHook:17` | intentional no-op demo hook |
 | L-4 internal fn used once (2) | `FullMath:11`, `Observations:95` | style; keeps the reference structure intact |
@@ -240,9 +240,9 @@ adjudicated in Phase 5. The one genuine finding (**H-2**) is fixed.
 | L-8 missing inheritance (2) | `SwapexFactory:7`, `Quoter:13` | same stylistic note as the Slither `MissingInheritance` ruling (Phase 5) |
 | L-9 PUSH0 opcode (29) | pragma lines across `src/` | `evm_version = "cancun"` is pinned in `foundry.toml`; every target (anvil, testnets) is post-Shanghai |
 | L-10 loop contains require/revert (7) | `Observations:88`, `TickMath:79/80`, `SwapexPool:327`, `PoolManager:190/370`, `Router:241` | intended: bounded loops fail loudly (`UnsettledDelta`, per-hop `minAmountOut`) instead of silently mis-accounting |
-| L-11 state change without event (11) | `Router` entries, `PoolManager.settle/take/donate`, `Quoter`, `OracleHook` | per-session / flash-accounting bookkeeping; the user-visible effects emit `Swap` / `ModifyLiquidity` / `OwnerChanged` at the manager |
+| L-11 state change without event (11) | `Router` entries, `PoolManager.settle/take/donate`, `Quoter`, `OracleHook` | per-session / flash-accounting bookkeeping; the user-visible effects emit `Swap` / `ModifyLiquidity` at the manager (ownership changes emit OZ's `OwnershipTransferStarted`/`OwnershipTransferred`) |
 | L-12 address set without checks (4) | `Router:78/118/139/158` (`_recipient = recipient`) | same ruling as Slither `missing-zero-check` (accepted in Phase 4) |
-| L-13 state var could be immutable (1) | `PoolManager:116` (`owner`) | assigned once in the constructor and never transferred; `immutable` would only save one SLOAD per admin call. Deferred deliberately — no security impact, avoids bytecode churn on deployed contracts |
+| L-13 state var could be immutable (1) | `PoolManager` owner (was `PoolManager:116`) | **Superseded by F.1 (D29).** The owner is now OpenZeppelin `Ownable`'s private `_owner`, intentionally mutable via the two-step transfer to the timelock/multisig — immutability would defeat the whole point |
 | L-14 unchecked return (5) | `Router:84/124/147/162` (`pm.unlock`), `:281` (`pm.settle`) | same as Slither `unused-return`: `settle` reverts on failure and its return equals `-getCurrencyDelta`, which every caller already checks |
 | L-15 unsafe ERC20 operation (9) | `SwapexPool:546`, `PoolManager:278/279/680/708`, `Router:280`, `Currency.sol:52/60/67` | transfers are balance-delta-checked (Manual review notes); `Router:280`'s approve is consumed exactly by the following `settle` (allowance returns to 0 — USDT-style zero-reset safe) |
 | L-16 unspecific pragma (16) | `^0.8.26` across `src/` | `solc_version = "0.8.26"` is pinned in `foundry.toml`; caret is the repo convention |

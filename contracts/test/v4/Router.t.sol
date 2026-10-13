@@ -22,7 +22,7 @@ contract RouterTest is Test {
     MockERC20 tokenC;
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         at = new AllowanceTransfer();
         router = new Router(pm, at);
         tokenA = new MockERC20("A", "A", 18);

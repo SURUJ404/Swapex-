@@ -37,7 +37,7 @@ contract LimitOrdersTest is Test {
     address bob;
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         at = new AllowanceTransfer();
         router = new Router(pm, at);
         orders = new LimitOrders(router, at);

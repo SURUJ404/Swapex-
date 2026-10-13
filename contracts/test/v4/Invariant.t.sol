@@ -142,7 +142,7 @@ contract InvariantTest is Test {
     MockERC20 tokenB;
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         tokenA = new MockERC20("A", "A", 18);
         tokenB = new MockERC20("B", "B", 18);
         (address lo, address hi) = address(tokenA) < address(tokenB)

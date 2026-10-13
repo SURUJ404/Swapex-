@@ -149,7 +149,7 @@ contract PoolManagerTest is Test {
     PoolKey keyBC;
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         router = new V4Router(pm);
         tokenA = new MockERC20("A", "A", 18);
         tokenB = new MockERC20("B", "B", 18);

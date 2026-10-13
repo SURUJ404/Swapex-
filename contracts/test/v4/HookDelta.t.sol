@@ -86,7 +86,7 @@ contract HookDeltaTest is Test {
     MockERC20 tokenB;
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         router = new DeltaRouter(pm);
         tokenA = new MockERC20("A", "A", 18);
         tokenB = new MockERC20("B", "B", 18);

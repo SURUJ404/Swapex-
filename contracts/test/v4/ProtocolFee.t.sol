@@ -8,6 +8,7 @@ import {BalanceDelta} from "../../src/v4/types/BalanceDelta.sol";
 import {PoolKey} from "../../src/v4/types/PoolKey.sol";
 import {TickMath} from "../../src/libraries/TickMath.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 uint160 constant Q96 = uint160(1 << 96);
 
@@ -74,7 +75,7 @@ contract ProtocolFeeTest is Test {
     currency curA;
 
     function setUp() public {
-        pm = new PoolManager(); // owner = this test contract
+        pm = new PoolManager(address(this)); // owner = this test contract
         router = new PFRouter(pm);
         tokenA = new MockERC20("A", "A", 18);
         tokenB = new MockERC20("B", "B", 18);
@@ -106,7 +107,7 @@ contract ProtocolFeeTest is Test {
         PoolKey memory key = _keyWithFee(3000);
         router.initialize(key, Q96);
 
-        vm.expectRevert(PoolManager.NotOwner.selector);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(0xBEEF)));
         vm.prank(address(0xBEEF));
         pm.setProtocolFee(key, 100000);
 

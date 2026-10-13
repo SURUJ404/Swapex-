@@ -90,7 +90,7 @@ contract HooksTest is Test {
     currency curB;
 
     function setUp() public {
-        pm = new PoolManager();
+        pm = new PoolManager(address(this));
         router = new HookRouter(pm);
         tokenA = new MockERC20("A", "A", 18);
         tokenB = new MockERC20("B", "B", 18);

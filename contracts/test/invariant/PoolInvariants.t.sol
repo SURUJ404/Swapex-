@@ -22,7 +22,7 @@ contract PoolInvariants is Test {
     PoolHandler internal handler;
 
     function setUp() public {
-        factory = new SwapexFactory();
+        factory = new SwapexFactory(address(this));
 
         MockERC20 a = new MockERC20("Token A", "TKA", 18);
         MockERC20 b = new MockERC20("Token B", "TKB", 18);
@@ -34,7 +34,11 @@ contract PoolInvariants is Test {
         handler = new PoolHandler(pool, token0, token1);
         token0.mint(address(handler), 1e32);
         token1.mint(address(handler), 1e32);
-        factory.setOwner(address(handler)); // handler may set/clear the protocol fee
+        // the handler may set/clear the protocol fee: hand ownership over via the two-step
+        // transfer (the handler must accept, exactly as a real new owner would)
+        factory.transferOwnership(address(handler));
+        vm.prank(address(handler));
+        factory.acceptOwnership();
 
         bytes4[] memory selectors = new bytes4[](8);
         selectors[0] = PoolHandler.mintPosition.selector;
