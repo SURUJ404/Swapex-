@@ -60,3 +60,4 @@ apps/web/playwright-report/
 __pycache__/
 *.pyc
 vercel-login.log
+.vercel
