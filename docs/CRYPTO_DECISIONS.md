@@ -135,6 +135,80 @@ Adding `AllowanceTransfer` to `Deploy.s.sol` before the Router shifts the Router
 
 ---
 
+## A.3 — Signed limit orders with partial fills (`LimitOrders`)
+
+**Threat.** A maker wants to trade at a price they chose without watching the market. The naive
+versions each break something: signing a bare "swap my tokens" message that a relayer fills on
+*any* pool at *any* price (no rate bound); an off-chain order book where the maker's funds stay
+spendable by nothing but honesty (no on-chain enforcement); or an order that can be executed
+twice (replay) or re-executed after the maker changed their mind (no cancel), or after the chain
+moved (no chain separation). A filler — anyone, since filling is permissionless — must never be
+able to take more input than signed, deliver less output than the signed rate, redirect the
+payout, or keep executing a dead order.
+
+**Threat model for the primitive.** The maker signs exactly one structure, off-chain, once:
+`Order{maker, tokenIn, tokenOut, fee, amountIn, minAmountOut, receiver, nonce, deadline}` under
+the EIP-712 domain `Swapex LimitOrders` v1 (`chainId`, `verifyingContract = this`). A filler
+submits it on-chain with a chosen partial `fillAmount`. Protections, each mapped to a test:
+
+| Threat | Mechanism | Test |
+|---|---|---|
+| replay of a filled order | `filled[ maker ][ nonce ]` accounting vs the signed `amountIn` | `test_fillOrder_partialFills_accumulateUpToAmountIn` |
+| two different orders sharing one nonce's accounting | first fill binds `orderDigest[maker][nonce]`; a byte-different order on the same nonce reverts | `test_fillOrder_nonceReusedForDifferentOrder_reverts` |
+| cross-contract / cross-chain replay | EIP-712 domain (verifyingContract, chainId) | `…_wrongVerifyingContract_reverts`, `…_crossChainReplay_reverts` (fork-free, `vm.chainId`) |
+| filler takes more input than signed | `fillAmount ≤ amountIn − filled`, maker's grant is per-fill bounded by the signed flow | `…_overfillRevertsWhileRemainderStands` |
+| filler delivers less than the signed rate | `minAmountOut` scaled by `fillAmount / amountIn` (linear ⇒ the rate holds for every partial), enforced by the Router as `amountOutMinimum` | `…_unreachableSignedRate_reverts`, per-split `assertGe` in the fuzz test |
+| filler re-routes to another pool | signed `fee` + both signed currencies must match the supplied `PoolKey` | `…_poolFeeMismatch_reverts`, `…_wrongTokenPair_reverts` |
+| stale order executed late | `deadline` is *inside* the struct (D28 — the filler cannot extend it) | `…_expired_reverts` |
+| maker changes their mind | `cancel(nonce)`, scoped to `msg.sender`'s own nonces | `test_cancel_*` (pending, remainder, scoping) |
+| wrong signer / tampered struct / high-s twin / 64-byte compact / ERC-1271 outcomes | same OZ `SignatureChecker` path as A.2, unchanged rules | the `wrongSigner`, `tamperedReceiver`, `malleableHighS`, `65Byte…`, `erc1271Wallet_*` tests |
+
+**Primitive used (never hand-written):** OpenZeppelin `EIP712` (domain + digest),
+`SignatureChecker` (EOA/1271, low-s, length), `Math.mulDiv` (512-bit floor scaling — a raw
+`a * b / c` could overflow), `SafeERC20.forceApprove` for the outer approval. Settlement reuses
+`AllowanceTransfer` + `Router.exactInputSingle`; this contract never transfers a token itself and
+holds **zero balance between fills**, so its standing max approvals to the router cover nothing
+at rest (both layers re-checked per fill in `_ensureSpendRights`).
+
+**Rejected alternatives:**
+
+* *Off-chain order book / signed message filled by a trusted party.* No on-chain enforcement of
+  the rate or the replay guard — exactly the hand-rolled scheme rule 1 exists to prevent.
+* *EIP-2612/permit-style "order"* (reuse the allowance domain).* Orders are not allowances: they
+  carry amounts, a rate, a receiver and partial-fill state. Forcing them into `PermitSingle` would
+  mean inventing semantics on top of a standard — rejected; the order gets its own typed struct.
+* *Signing the full `PoolKey` (tickSpacing, hooks).* Opaque in wallets for near-zero gain: pools
+  are permissionless, the filler may legitimately pick *any* pool, and the maker's real protection
+  is the signed rate, which travels with the order. Residual risk (filler picks a weird pool for
+  the signed pair and executes *at or worse than* the maker's floor) is bounded by `minAmountOut`
+  and documented here rather than hidden in an unreadable struct.
+* *Unscaled `minAmountOut` for partial fills* (check the full floor on each piece) — would reject
+  legitimate partials. Linear scaling preserves the signed **rate** per piece; dust fills below
+  ~1e3 base units can lose to fee+integer rounding and revert (maker loses nothing; the fuzz test
+  documents the boundary).
+
+**Assumptions:**
+
+* The maker's ERC-20 `approve(AllowanceTransfer)` (outer layer) and grant to `LimitOrders`
+  (spender = this contract) are in place — the same two-layer setup the web app already performs
+  for swaps; a missing grant reverts `InsufficientAllowance`, never a silent partial pull.
+* Input is ERC-20 only: `tokenIn == address(0)` reverts `NativeInputNotSupported` (there is no
+  pull path for native input). Native *output* works (the Router takes straight to the receiver).
+* Cancelling a nonce is permanent for that `(maker, nonce)` pair — a maker who cancels must use a
+  fresh nonce for a new order.
+
+**What breaks:**
+
+* A 64-byte EIP-2098 signature is rejected (A.2 rule carried over).
+* If the maker revokes the outer approval or the grant mid-flight, fills revert until restored.
+* Fee-on-transfer tokens would break the "exactly `fillAmount` arrives" accounting — unsupported,
+  same as the Router (documented in TESTNET_SECURITY: mock tokens only).
+
+**Verified by:** `forge test --match-contract LimitOrdersTest` → **28 passed, 0 failed** (2 fuzz
+tests at `--fuzz-runs 5000`); `forge test` full suite → **178 passed, 0 failed**.
+
+---
+
 ## A.2 — One verification path for EOAs *and* contract wallets (`SignatureChecker`)
 
 **Threat.** Three separate failure modes land in the same code path:
@@ -198,8 +272,9 @@ tests rather than re-derived in comments.
 | Command | Result |
 |---|---|
 | `forge build` | ok |
-| `forge test` | **150 passed, 0 failed** (115 pre-existing + 31 `AllowanceTransferTest` + 12 `RouterTest`, incl. the H-2 refund tests and the D28 deadline regression) |
+| `forge test` | **178 passed, 0 failed** (115 pre-existing + 31 `AllowanceTransferTest` + 12 `RouterTest` + 28 `LimitOrdersTest`, incl. the H-2 refund tests and the D28 deadline regression) |
 | `forge test --match-contract AllowanceTransferTest --fuzz-runs 5000` | **31 passed, 0 failed**, 3 fuzz tests × 5000 runs |
+| `forge test --match-contract LimitOrdersTest --fuzz-runs 5000` | **28 passed, 0 failed**, 2 fuzz tests × 5000 runs |
 | `npx playwright test` (apps/web) | **1 passed** — browser-signed `PermitSingle`: lands, replay → `NonceAlreadyUsed`, wrong chain → `InvalidSignature`, extended `sigDeadline` → `InvalidSignature` |
 | `.github/workflows/ci.yml` | installs `forge-std` + `OpenZeppelin/openzeppelin-contracts@v5.2.0 --no-git`, runs the suite and the 5000-run signature fuzz |
 
@@ -218,5 +293,6 @@ diff** against `HEAD` — the failure predates this work). Five approaches were 
 The dead `[profile.coverage]` was removed rather than left in `foundry.toml` as misleading config.
 
 **Substitute evidence:** branch-by-branch mapping of every conditional in
-`AllowanceTransfer.sol` to the test that exercises it (all 31 in
-`contracts/test/v4/AllowanceTransfer.t.sol`), each confirmed green by the commands above.
+`AllowanceTransfer.sol` (all 31 in `contracts/test/v4/AllowanceTransfer.t.sol`) and in the A.3
+`LimitOrders.sol` (all 28 in `contracts/test/v4/LimitOrders.t.sol`), each confirmed green by the
+commands above.
