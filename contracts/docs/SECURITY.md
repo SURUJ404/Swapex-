@@ -155,6 +155,28 @@ signature, and adding the inheritance clause would only chase a cosmetic detecto
 ABI surface, or runtime behaviour differs. It is noted for a future cleanup pass rather than
 fixed here, to avoid gratuitous bytecode churn in already-deployed, already-tested contracts.
 
+## Phase 6 — crypto A.3 `LimitOrders` + F.1 two-step ownership (Slither re-run)
+
+Re-ran Slither 0.11.6 after adding `src/v4/periphery/LimitOrders.sol` (A.3) and migrating
+`PoolManager`/`SwapexFactory` to OpenZeppelin `Ownable2Step` + `TimelockController` (F.1, D29),
+same invocation as Phase 5:
+
+```
+analyzed (52 contracts with 102 detectors), 77 result(s) found
+```
+
+The 77 are the Phase 1–5 findings above (line numbers shifted — earlier tables cite the builds
+they were written against). Three detector instances land **in the new code**; none is a defect.
+On the ownership migration specifically the run is **clean**: no `missing-zero-check`,
+arbitrary-transfer or ownership finding on `Ownable2Step.transferOwnership`/`acceptOwnership` or
+the constructor-supplied initial owner (the zero-address class of bug is structurally gone — D29).
+
+| Detector | Location | Assessment |
+|---|---|---|
+| `reentrancy-events` | `LimitOrders.fillOrder` (`LimitOrders.sol#130-197`: `at.transferFrom` `#177`, `_ensureSpendRights` `#179`, `router.exactInputSingle` `#190`, `OrderFilled` `#196`) | **False positive — checks-effects-interactions is strict.** The digest binding, remaining-amount check and `filled`/`canceled` writes all happen *before* `at.transferFrom` moves anything, so a re-entering `tokenIn` observes already-updated accounting: re-filling the *same* order hits `FillExceedsRemaining`, and a different signed order is simply a nested legitimate fill (per-order, per-nonce state; nothing global is read-then-written). There is no ETH path (`NativeInputNotSupported`), and the Router settlement runs inside `PoolManager.unlock`, which rejects nested sessions (`AlreadyUnlocked`). The event is emitted after all state, so even log ordering is causal. |
+| `timestamp` | `fillOrder` deadline (`#134`), `_ensureSpendRights` allowance expiry (`#210`) | **Accepted — identical ruling to Phase 5 `timestamp`.** Both bounds come from the *signed* order / on-chain grant (`uint48 deadline`, grant `expiration`); deadline semantics are wall-clock by definition and the threat they remove (unlimited-lifetime signed orders) is the one A.3 exists for. Minute-scale miner skew cannot turn an expired fill profitable — it only shifts a fill the maker already authorised into an adjacent block. |
+| `cyclomatic-complexity` | `LimitOrders.fillOrder` (15) | **By design.** A sequential validation pipeline (order sanity → signature → digest binding → remaining → CEI writes → pull → rights → swap), each stage guarded by its own custom error for testability — strictly simpler than the already-accepted `SwapexPool.swap` (30) and `PoolManager._swap` (34). |
+
 
 ## Aderyn 0.6.8 — 7 High / 18 Low, all triaged (one fixed)
 

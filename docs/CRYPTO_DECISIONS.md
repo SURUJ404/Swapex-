@@ -272,7 +272,7 @@ tests rather than re-derived in comments.
 | Command | Result |
 |---|---|
 | `forge build` | ok |
-| `forge test` | **178 passed, 0 failed** (115 pre-existing + 31 `AllowanceTransferTest` + 12 `RouterTest` + 28 `LimitOrdersTest`, incl. the H-2 refund tests and the D28 deadline regression) |
+| `forge test` | **188 passed, 0 failed** (115 pre-existing + 31 `AllowanceTransferTest` + 12 `RouterTest` + 28 `LimitOrdersTest` + 10 `AdminTest`, incl. the H-2 refund tests, the D28 deadline regression and the F.1 timelock/two-step tests) |
 | `forge test --match-contract AllowanceTransferTest --fuzz-runs 5000` | **31 passed, 0 failed**, 3 fuzz tests × 5000 runs |
 | `forge test --match-contract LimitOrdersTest --fuzz-runs 5000` | **28 passed, 0 failed**, 2 fuzz tests × 5000 runs |
 | `npx playwright test` (apps/web) | **1 passed** — browser-signed `PermitSingle`: lands, replay → `NonceAlreadyUsed`, wrong chain → `InvalidSignature`, extended `sigDeadline` → `InvalidSignature` |
