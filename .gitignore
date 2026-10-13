@@ -53,3 +53,4 @@ aderyn-report*
 
 __pycache__/
 *.pyc
+vercel-login.log
