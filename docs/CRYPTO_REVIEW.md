@@ -39,9 +39,15 @@ Companion documents (detail lives there, this is the index):
    keccak256 hashes) signed EIP-191 into `<chainId>.json.sig`, verified in CI; `deploy.mjs` is
    the canonical broadcast flow and passes `forge script --verify` through on non-local chains.
 7. **Web flow**: two-layer grants (one-time ERC-20 `approve` to `AllowanceTransfer`, then a
-   bounded `permit`/`setAllowance` to the Router), regenerated ABI, addresses pointing at the
-   current anvil deployment (rotation #7, matching the committed manifest — includes
-   `MERKLE_DISTRIBUTOR`).
+   **signed EIP-712 PermitSingle** — built in `lib/typedData.js`, domain bound to the app's
+   required chain, refused on any domain/connected-chain mismatch, digest re-verified to the
+   expected signer before submission, and shadowed in-page by a human-readable summary panel
+   while the wallet prompt is open), regenerated ABI, addresses pointing at the current anvil
+   deployment (rotation #7, matching the committed manifest — includes `MERKLE_DISTRIBUTOR`).
+   Recipient inputs are EIP-55-validated with a named bad-checksum warning; token logos are
+   self-hosted under content-hashed filenames and every route ships a strict CSP (tight
+   `connect-src`, `frame-ancestors 'none'`, nosniff) — no third-party scripts or stylesheets
+   exist for SRI to cover, and a policy test keeps it that way.
 8. **Browser end-to-end proof** (`apps/web/e2e/`): Playwright signs a real `PermitSingle`
    in the page via an injected EIP-1193 shim, cross-checks the digest in Node, lands the grant
    on-chain, and asserts the abuse cases against real revert selectors.
@@ -93,6 +99,7 @@ Companion documents (detail lives there, this is the index):
 | D oracle read policy (D33) | A value decision fed spot (the renamed `lastSwapSqrtPrice*` hook, or `slot0`) or a silently truncated / fake-epoch window as if it were a TWAP; a same-block slam-and-return moving a "TWAP"; short windows dominated by manipulation; pools that were never initialized being consulted | Manipulation *within* the window's weighting (inherent to TWAPs — dilution, not elimination: longer windows cost more to move); pools whose ring nobody grew far enough (consult refuses rather than guesses — grow `cardinalityNext`, it is permissionless); the quotes themselves (spot by design, settlement-bounded by D31) |
 | H supply chain (D34) | A re-pointed/malicious CI action tag running in a job that sees the repo and registry; a transitive dependency change invisible in review; a nondeterministic build that makes artifact-hash verification (F.2) meaningless | A compromised GitHub serving a malicious pinned commit; a malicious *already-pinned* dependency version (SBOM makes it auditable, not immune); releases signed before the documented provenance/attestation flow actually exists |
 | C Merkle allowlist (D35) | Forged membership (second-preimage: a tree node replayed as a claim leaf; a tampered index/account/amount/proof); duplicate/replayed claims including via a reentrant token; a compromised key silently rotating the payout root; generator-vs-chain convention drift | Whoever controls the *timelocked owner set* (they can rotate the root after the delay — that is governance, not an exploit); a tree published with wrong entries (garbage in, garbage out — eligibility is not a crypto question); DoS by a token that refuses `transfer` (claims revert, nothing is double-paid) |
+| G web signing/transport (D36) | Blind or wrong-chain wallet prompts (typed-data domain guard + in-page plain-words summary + post-sign digest recovery check); pasted-address case-tampering (named EIP-55 verdict); script/img injection into the approval page via third-party CDNs (self-hosted content-hashed logos, strict CSP with host-scoped `connect-src`, no third-party scripts/styles at all); signatures or approvals leaking into localStorage (runtime + static policy test) | A compromised signer key (it signs valid grants); 'unsafe-inline' in `script-src`/`style-src` (required by Next.js/styled-components without a nonce middleware — residual XSS surface documented in D36); what a hostile wallet *shows* the user (the in-page summary is the cross-check, not a guarantee); phishing away from the origin entirely |
 
 ## Findings and fixes (the part that matters)
 
@@ -121,10 +128,10 @@ Companion documents (detail lives there, this is the index):
 | `forge test --fuzz-runs 5000 --match-contract MerkleDistributorTest` | **26 passed, 0 failed** (forged-claim fuzz × 5000: random `(index, account, amount)` never validates) |
 | `forge script` broadcast (via `deploy.mjs --broadcast`) | **rotation #7** on a fresh anvil (C added `MerkleDistributor`, deployed last so earlier CREATE order is unchanged; the fresh chain resets nonces, so every address changed); signed manifest refreshed with all 10 contracts |
 | `node scripts/verify-manifest.mjs 31337 --rpc http://127.0.0.1:8545` | all PASS — EIP-191 signature, commit ancestry, settings match, on-chain codehash rows; tampered manifest → FAIL (exit 1) |
-| `npx playwright test` (apps/web, `npm run test:e2e`) | **1 passed** — sign → cross-verify → land → replay `NonceAlreadyUsed` → wrong-chain `InvalidSignature` → extended-deadline `InvalidSignature` |
+| `npx playwright test` (apps/web, `npm run test:e2e`) | **2 passed** — (1) sign → cross-verify → land → replay `NonceAlreadyUsed` → wrong-chain `InvalidSignature` → extended-deadline `InvalidSignature`; (2) the real UI swap-grant flow: connect → Approve → EIP-712 summary panel observed mid-prompt (amount/spender/chain/contract/deadline) → signed permit lands on-chain → Swap completes with balance proof — **zero browser CSP violations** during the run |
 | `node scripts/smoke.mjs` | PASS (quote + native swap + token swap) on rotation #7, with `deadline`/expiry anchored to `max(chain, wall)`; **merkle claim**: root == committed fixture root, slot 0 pays 1 SWA to the leaf account, duplicate claim reverts `AlreadyClaimed` |
 | `node scripts/smokeLiquidity.mjs` | PASS (add with `amountMax` bounds + remove with `amountMin` bounds) on rotation #7 |
-| `npm test` (apps/web) | 30 passed (22 + 8 new `tests/merkle.test.ts` — leaf/pair conventions, independent fold, tamper matrix, odd-tree carry, fixture reproduction) |
+| `npm test` (apps/web) | **61 passed** (30 pre-G + 22 typed-data/EIP-55 + 4 storage-policy + 5 external-resource/CSP) |
 | `npm run merkle -- ../../contracts/test/fixtures/allowlist.json ../../contracts/test/fixtures/merkle.json` (apps/web) | regenerates the committed fixture: root `0xdb3e3af9…c15`, 4 entries; forge suite parses the same file via `fs_permissions` (read-only) |
 | `npm run lint` | 0 errors (18 pre-existing warnings) |
 | `npm run build` | compiled, all routes prerendered |
@@ -153,6 +160,9 @@ account/amount, bitmap words 0 and 1, every `InvalidProof`/`AlreadyClaimed` reve
 * Aderyn 0.6.8 paper trail is historical: it cannot run on this Windows machine and is not wired
   into CI; Slither is re-run locally per phase.
 * `forge coverage` substitute (above) — line-percentage target not measurable as stated.
+* CSP keeps `'unsafe-inline'` for `script-src`/`style-src` (Next.js inline bootstrap +
+  styled-components); a nonce-based CSP via middleware would remove it — recorded as the D36
+  follow-up, not done here.
 
 ## What an external auditor should look at first
 
@@ -170,15 +180,18 @@ account/amount, bitmap words 0 and 1, every `InvalidProof`/`AlreadyClaimed` reve
    hash vs OZ `MerkleProof`'s commutative fold, the bitmap word math, and the
    schedule/execute/cancel timelock test — plus the three-way fixture agreement (generator
    output, independent JS fold, Solidity verifier).
+8. The web signing path (D36): `lib/typedData.js` (`signTypedDataWithGuard`'s chain guard and
+   post-sign recovery check), the `useApprove` nonce scan + permit submission, the in-page
+   summary's fidelity to the signed struct, and the CSP in `next.config.mjs` (note the
+   documented `'unsafe-inline'` residual).
 
 ## Not done, on purpose or deferred
 
-* **Items A, B, C, D, F and H of the original A–I hardening list are complete** (A.1–A.3, B.1–B.3
+* **Items A, B, C, D, F, G and H of the original A–I hardening list are complete** (A.1–A.3, B.1–B.3
   with B.2 rejected-with-analysis per D32, C Merkle allowlists per D35, D33 oracle read policy,
-  F.1–F.3, H supply chain per D34; each with CRYPTO_DECISIONS/DECISIONS entries and verified-by
-  notes above). **Remaining: E (hook-address permission tests + verified-hook registry), G (web:
-  typed data everywhere, EIP-55 validation, SRI/CSP tightening), I (advanced crypto — proposal
-  first).**
+  F.1–F.3, H supply chain per D34, G web signing/transport per D36; each with
+  CRYPTO_DECISIONS/DECISIONS entries and verified-by notes above). **Remaining: E (hook-address
+  permission tests + verified-hook registry), I (advanced crypto — proposal first).**
 * **No primitives written by hand, no new dependencies added**: OZ v5.2.0 (pinned), ethers v5,
   Playwright for the browser test.
 * **Nothing mainnet-shaped**: anvil chain 31337 only, public dev keys only, no secrets in the

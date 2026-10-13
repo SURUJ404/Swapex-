@@ -565,3 +565,32 @@ commit: the generator's first draft dropped upper-level proof siblings for right
 proofs, and tests cannot drift), deploys the distributor LAST (earlier CREATE order intact),
 and mints the 10 SWA the fixture promises - rotation #7 signed; `smoke.mjs` claims slot 0 with
 the fixture proof on-chain and asserts the duplicate call reverts `AlreadyClaimed`.
+
+## D36 - Web signing & transport hardening: EIP-712 grants with a chain guard, EIP-55 validation, strict CSP (G)
+
+Web-only item (no Solidity change). Decisions:
+
+* The swap flow's second grant layer is now a **signed EIP-712 `PermitSingle`** (ethers v5
+  `_signTypedData`, single builder `apps/web/lib/typedData.js`) instead of a direct
+  `setAllowance` transaction: domain bound to the app's REQUIRED chain, refusal on any
+  domain/connected-chain mismatch, bounded `isNonceUsed` scan, signed `sigDeadline` +
+  chain-anchored expiry, and a post-sign digest-recovery check before submission. An in-page
+  summary panel shows every signed field while the wallet prompt is open. viem was rejected
+  (a second web3 stack for one function, against item H's supply-chain goal; ethers is the
+  pinned, already-audited app dependency) - full rationale in `CRYPTO_DECISIONS.md` ## G.
+* Recipient inputs validate via EIP-55 (`apps/web/lib/address.js`): bad mixed-case checksums
+  get a named warning, the checksummed form is what is submitted. No signatures or approvals
+  may ever reach localStorage (runtime + static policy test enforces the invariant).
+* `next.config.mjs` ships a strict CSP (host-scoped `connect-src`, `frame-ancestors 'none'`,
+  nosniff, frame-DENY, strict referrer) and token logos are self-hosted under
+  content-hashed filenames; no third-party scripts/stylesheets exist, so SRI has nothing to
+  hash - a policy test keeps it that way. The `'unsafe-inline'` residual (Next.js +
+  styled-components) is documented; nonce middleware is the recorded follow-up.
+* G.4 (backend webhooks) is N/A - no backend exists; the HMAC/TLS/CORS requirement is
+  recorded in CRYPTO_DECISIONS.md ## G for whenever one is added.
+
+**Verification:** `npm test` 61 passed (22 typed-data/EIP-55 + 4 storage-policy + 5 CSP/logo
+policy new); `npx playwright test` 2 passed - including the real-UI swap-grant flow proving
+the summary panel appears during the wallet prompt, the signed permit lands bounded
+on-chain, the swap completes, and zero CSP violations occur; live header fetch shows the
+full CSP served; lint 0 errors; build ok.

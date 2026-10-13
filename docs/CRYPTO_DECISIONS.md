@@ -627,6 +627,50 @@ trusted set** — regenerated and uploaded by CI on every run; (c) a CI double-b
 * A future backend added without HMAC/TLS/CORS work: explicitly documented as a blocking
   requirement above, not a suggestion.
 
+### G.3 - SRI / self-hosted logos / strict CSP
+
+* No third-party **script or stylesheet** exists in the shipped app (`_document.js` adds no
+  external `<Head>` links; `globals.css` imports only the local Tailwind package), so there is
+  nothing for Subresource Integrity to hash - the policy suite `tests/externalResources.test.js`
+  turns that into a permanent invariant: an external `<script src="http...">` or stylesheet
+  link fails the tests.
+* The only runtime third-party fetch was the token-logo `<img>` from raw.githubusercontent
+  (all four TOKEN_LIST entries shared one asset). It is self-hosted at
+  `public/tokens/token-logo.c253d7c5.png` - the filename carries the sha256 prefix - and
+  served from the app origin (`img-src 'self'`; live check: 200 image/png).
+* CSP ships via `next.config.mjs` `headers()`: `default-src 'self'`, `object-src` /
+  `frame-ancestors 'none'`, `base-uri` / `form-action 'self'`, `img-src` / `font-src`
+  `'self' data:`, and a **tight `connect-src`** naming only the real anvil RPC endpoints, the
+  WalletConnect/Infura hosts the connectors use, and the dev-HMR websockets. Every `*` is
+  host-scoped (`*.walletconnect.com` shape - asserted by test), never a bare origin wildcard.
+  `nosniff`, `X-Frame-Options: DENY` and `strict-origin-when-cross-origin` ride along.
+* **`'unsafe-inline'` in script-src/style-src is kept**: Next.js' inline bootstrap and
+  styled-components' runtime style injection both require it without a nonce pipeline. A
+  nonce-based CSP would remove it but needs per-request middleware that does not exist in this
+  pages-router app; the residual (inline-exec XSS if one ever lands) is recorded as an open
+  risk in CRYPTO_REVIEW rather than papered over. `'unsafe-eval'` is NOT needed - verified by
+  running the full e2e suite under the shipped CSP.
+* The swap-grant e2e fails if the browser console reports ANY CSP violation during
+  connect -> sign -> swap, so the headers cannot silently break the app.
+
+### G.4 - not applicable
+
+Swapex has no backend or indexer: the browser talks JSON-RPC directly. If one is ever added,
+its webhooks must carry HMAC-SHA256 with constant-time comparison, TLS everywhere, and no
+wildcard CORS. Recorded here as a blocking requirement (see Assumptions), not a suggestion.
+
+### Verified by
+
+* `npm test` (apps/web) -> **61 passed**: typed-data builder/guard/recovery/summary (14),
+  EIP-55 matrix incl. official EIP-55 vectors (8), storage policy runtime + static scan (4),
+  external-resource/CSP/logo policy (5), prior suites unchanged.
+* `npx playwright test` -> **2 passed**: the original permit replay/domain spec, and the new
+  real-UI swap-grant spec (summary panel observed while the wallet prompt is open, signed
+  permit landed bounded on-chain, swap completes, **zero CSP violations** in the console).
+* Live header fetch (`Invoke-WebRequest http://localhost:3000/`) -> full CSP + nosniff +
+  frame-DENY + strict referrer served; logo URL -> 200 image/png, 2984 bytes.
+* `npm run lint` -> 0 errors; `npm run build` -> compiled.
+
 ## Verification (commands + results, run on this repository)
 
 | Command | Result |
