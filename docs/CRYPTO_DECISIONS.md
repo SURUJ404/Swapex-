@@ -559,6 +559,74 @@ trusted set** — regenerated and uploaded by CI on every run; (c) a CI double-b
   reverts `OwnableUnauthorizedAccount`; `claim` on a zero-amount/zero-account leaf reverts
   even if such an entry were committed (`ZeroAmount` / `ZeroAccount`).
 
+## G - Web app signing and transport hardening (G.1 typed data + chain guard, G.2 EIP-55, G.3 SRI/CSP)
+
+### Threat
+
+1. **Blind / wrong-chain signing.** A wallet prompt over opaque bytes, or a typed-data payload
+   whose `domain.chainId` is not the chain the user believes they are on, lets a hostile page
+   harvest a signature that is valid elsewhere or valid for a purpose the user cannot read.
+2. **Address tampering.** Hex addresses have no internal structure: a single case flip in a
+   pasted address is invisible unless the EIP-55 checksum is actually checked, and the app
+   previously reduced that to a generic "invalid recipient" with no checksum diagnosis.
+3. **Third-party content on the signing origin.** External scripts/stylesheets/logos plus a
+   missing CSP mean whatever sits on the CDN/RPC path can inject code into the exact page
+   where users approve spending (supply chain + MITM surface on the approval UI).
+4. **Unauthenticated backend webhooks** if a backend/indexer ever appears (G.4).
+
+### Primitive and design
+
+* **ethers v5 `_signTypedData` / `verifyTypedData`** (the pinned app dependency) for EIP-712,
+  **`utils.getAddress`** for EIP-55. Everything lives in `lib/typedData.js` and `lib/address.js`;
+  no digest, hash, or recovery is ever written by hand (rule 1).
+* `signTypedDataWithGuard` refuses when `domain.chainId !== connectedChainId` (rule 4 applied
+  at the moment of signing, not only at submit), then verifies post-sign that the digest
+  recovers to the expected signer before anyone submits it on-chain. `formatSigningSummary`
+  renders amount / spender / signed deadline / chain / verifying contract in plain words while
+  the wallet prompt is open. `buildPermitTypedData` normalizes every address through
+  `getAddress`, so a bad mixed-case input throws at build time.
+* `checkAddress` returns `{ok, normalized, mixedCase, warning}` and **names** a bad EIP-55
+  checksum distinctly from "not an address" (G.2).
+
+### Alternatives rejected
+
+* **viem `signTypedData`** (the spec's example): adding a second web3 stack for one function
+  enlarges the supply-chain surface item H is shrinking; ethers' EIP-712 path is pinned,
+  spec-conformant, and already exercised by the A-item contract tests and the browser e2e.
+* **Any hand-rolled digest** - forbidden by rule 1 and pointless; ethers implements EIP-712.
+* **`personal_sign` (ERC-191) for grants**: no domain/nonce/deadline structure, violates
+  rule 4; the app has no other message-signing surface.
+* **Warn-instead-of-reject for lowercase addresses**: EIP-55 itself defines all-lowercase and
+  all-uppercase as valid checksum-less forms; only *mixed-case* input can be checksum-verified,
+  so only mixed-case gets the checksum verdict (exactly what G.2 asks).
+* **Contract account nonce for the permit**: the permit nonce is an on-contract bitmap, not an
+  account nonce - it is discovered with a bounded `isNonceUsed` scan (assumptions).
+
+### Assumptions
+
+* The wallet implements `eth_signTypedData_v4` (true for any wallet that can hold testnet
+  funds). If it does not, the grant fails closed with an error toast - there is no fallback
+  to a weaker signing path.
+* Permit nonces scan from 0 with a bounded loop; testnet grant counts are tiny, and exceeding
+  the bound fails closed (bound lives in `useApprove`).
+* ERC-1271 contract wallets: on-chain verification accepts them (A.2 `SignatureChecker`);
+  in-app signing through a contract wallet's own UI is out of scope - the app signs with
+  whatever signer the connected wallet exposes.
+* **G.4 not applicable**: Swapex has no backend or indexer; the browser talks JSON-RPC
+  directly. Recorded here so a future backend cannot silently skip HMAC-SHA256 webhook auth,
+  TLS, and non-wildcard CORS.
+
+### What breaks
+
+* Wallet parked on the wrong chain: signing refuses with an explicit chain-mismatch message
+  (belt) even though `NetworkGuard` already blocks the flow (braces).
+* A wallet returning garbage bytes (non-signing/corrupted prompt): post-sign recovery check
+  refuses submission - fail-closed, user sees the error toast and retries.
+* A pasted recipient in wrong mixed-case: rejected with a named checksum warning; the user
+  must re-copy the address. All-lowercase input still works (normalizes to checksummed form).
+* A future backend added without HMAC/TLS/CORS work: explicitly documented as a blocking
+  requirement above, not a suggestion.
+
 ## Verification (commands + results, run on this repository)
 
 | Command | Result |
