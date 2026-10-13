@@ -7,6 +7,7 @@ import NetworkGuard from './NetworkGuard'
 import useTokenBalance from '../hooks/useTokenBalance'
 import useTransact from '../hooks/useTransact'
 import { parseAmount, formatAmount } from '../lib/amounts'
+import { checkAddress } from '../lib/address'
 
 const GAS_RESERVE = utils.parseEther('0.01')
 
@@ -21,7 +22,10 @@ export default function SendForm() {
 
   const { balance, refetch } = useTokenBalance(selectedToken)
   const amountBn = useMemo(() => parseAmount(amount, selectedToken.decimals), [amount, selectedToken])
-  const validRecipient = utils.isAddress(recipient)
+  // EIP-55 validation (crypto G.2): bad mixed-case checksums get a named warning, and the
+  // checksummed form is what actually gets submitted
+  const recipientCheck = recipient ? checkAddress(recipient) : null
+  const validRecipient = Boolean(recipientCheck?.ok)
 
   const setMax = () => {
     let max = balance
@@ -30,20 +34,21 @@ export default function SendForm() {
   }
 
   let status = null
-  if (!validRecipient) status = recipient ? 'Invalid recipient address' : 'Enter a recipient'
+  if (!validRecipient) status = recipientCheck ? recipientCheck.warning : 'Enter a recipient'
   else if (!amountBn) status = 'Enter an amount'
   else if (amountBn.gt(balance)) status = `Insufficient ${selectedToken.symbol} balance`
 
   const send = async () => {
     if (!account || !library || !amountBn || !validRecipient) return
     const signer = library.getSigner()
+    const to = recipientCheck.normalized
     await run({
       label: `Send ${selectedToken.symbol}`,
-      successMessage: `Sent ${formatAmount(amountBn, selectedToken.decimals)} ${selectedToken.symbol} to ${recipient.slice(0, 6)}...`,
+      successMessage: `Sent ${formatAmount(amountBn, selectedToken.decimals)} ${selectedToken.symbol} to ${to.slice(0, 6)}...`,
       send: () =>
         selectedToken.address === 'NATIVE'
-          ? signer.sendTransaction({ to: recipient, value: amountBn })
-          : new Contract(selectedToken.address, ERC20_ABI, signer).transfer(recipient, amountBn),
+          ? signer.sendTransaction({ to, value: amountBn })
+          : new Contract(selectedToken.address, ERC20_ABI, signer).transfer(to, amountBn),
       onSuccess: () => {
         setAmount('')
         setRecipient('')
