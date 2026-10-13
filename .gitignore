@@ -44,7 +44,8 @@ next-env.d.ts
 # contracts (Foundry)
 contracts/lib/
 contracts/out/
-contracts/cache/
+cache/
+contracts/out/
 contracts/broadcast/
 
 # static analysis artifacts
