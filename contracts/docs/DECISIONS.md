@@ -254,3 +254,32 @@ per-user registry a front-end could not know how much liquidity a wallet owns an
 correct removal. Known limitation: trading fees still accrue to the *merged* slot, so the first user
 to remove sweeps the whole slot's accrued fees; a full per-user PositionManager (tracking fees per
 beneficiary) is future work. For the single-provider local demo this is sufficient.
+
+## D27 — Users grant bounded, expiring allowances to the Router through `AllowanceTransfer`, verified with OpenZeppelin's `SignatureChecker`
+**Decision:** New `src/v4/periphery/AllowanceTransfer.sol` (EIP-712 domain "Swapex AllowanceTransfer"
+v1) holds per-`(owner, token, spender)` grants as `PermitDetails{uint160 amount, uint48 expiration,
+uint48 nonce}` with a 256-bit nonce bitmap. Grants are established two ways — off-chain via
+`permit(owner, PermitSingle, sig, sigDeadline)` or on-chain with no signature at all via
+`setAllowance(...)` — and spent by `transferFrom`, which only the named spender may call.
+`Router` now takes the `AllowanceTransfer` as a constructor dependency and settles through
+`at.transferFrom(_payer, address(this), …)` instead of reading a raw ERC-20 allowance; it also gains
+`exactInputSingleWithPermit`, which submits a signed grant and the swap atomically. Verification is
+`SignatureChecker.isValidSignatureNow` — OpenZeppelin picks the EOA path (`ECDSA.tryRecover`, so
+high-`s`/`address(0)`/length are rejected for us) or the ERC-1271 path purely from
+`signer.code.length`, giving smart-account support with no branch of our own. Grant signing accepts
+only the canonical **65-byte** `(r, s, v)` encoding: OZ's `tryRecover(bytes)` rejects 64-byte
+EIP-2098, and unpacking `(r, vs)` ourselves would violate the "never implement a primitive by hand"
+rule for a format ethers/viem never emit.
+**Rationale:** Approving a DEX with an unlimited, never-expiring ERC-20 allowance before swapping is
+the standing drain risk (the approval outlives the front end). A bounded, expiring, per-spender,
+nonce-counted, chain-and-contract-separated grant removes that, and doing it with pinned OpenZeppelin
+primitives keeps us out of hand-rolled signature code. Two quirks are deliberate: because submitting
+a grant is permissionless and it can be relayed ahead of the user's swap, `exactInputSingleWithPermit`
+skips the permit when `isNonceUsed` already shows the nonce spent (a `try/catch` would behave
+identically, so the cheaper pre-check is used) instead of reverting on `NonceAlreadyUsed`; and the
+Router rejects a grant whose `spender` is not itself (`InvalidPermitSpender`) rather than letting a
+mismatched grant burn a nonce and fail at settlement. Wiring the AllowanceTransfer in before the
+Router shifts every subsequent `CREATE` address in `Deploy.s.sol` — the explicit `new
+AllowanceTransfer()` was kept over a self-deploying Router so the dependency stays visible and
+injectable, and the recorded addresses in the web app and smoke scripts were updated to match.
+Full threat model, rejected alternatives and what breaks: `docs/CRYPTO_DECISIONS.md` (A.1, A.2).

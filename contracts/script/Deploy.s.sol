@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Script, console} from "forge-std/Script.sol";
 import {PoolManager, ModifyLiquidityParams} from "../src/v4/PoolManager.sol";
 import {Router} from "../src/v4/periphery/Router.sol";
+import {AllowanceTransfer} from "../src/v4/periphery/AllowanceTransfer.sol";
 import {Quoter} from "../src/v4/periphery/Quoter.sol";
 import {currency} from "../src/v4/types/Currency.sol";
 import {PoolKey} from "../src/v4/types/PoolKey.sol";
@@ -27,20 +28,26 @@ contract Deploy is Script {
         vm.startBroadcast(pk);
 
         PoolManager pm = new PoolManager();
-        Router router = new Router(pm);
+        AllowanceTransfer at = new AllowanceTransfer();
+        Router router = new Router(pm, at);
         Quoter quoter = new Quoter(pm);
 
         MockERC20 swa = new MockERC20("Swapex A", "SWA", 18);
         MockERC20 swb = new MockERC20("Swapex B", "SWB", 18);
         MockERC20 swc = new MockERC20("Swapex C", "SWC", 18);
 
-        // fund the deployer and approve the router so it can pull input / liquidity tokens.
+        // fund the deployer and grant the router a bounded allowance over each token so it can
+        // pull input / liquidity tokens (one-time ERC-20 approval to the allowance contract, then
+        // a per-spender grant the router may spend until expiry).
         swa.mint(deployer, 1_000_000e18);
         swb.mint(deployer, 1_000_000e18);
         swc.mint(deployer, 1_000_000e18);
-        swa.approve(address(router), type(uint256).max);
-        swb.approve(address(router), type(uint256).max);
-        swc.approve(address(router), type(uint256).max);
+        swa.approve(address(at), type(uint256).max);
+        swb.approve(address(at), type(uint256).max);
+        swc.approve(address(at), type(uint256).max);
+        at.setAllowance(address(swa), address(router), type(uint160).max, type(uint48).max);
+        at.setAllowance(address(swb), address(router), type(uint160).max, type(uint48).max);
+        at.setAllowance(address(swc), address(router), type(uint160).max, type(uint48).max);
 
         // 1:1 pools (all 18-decimal, price = Q96). Native ETH is address(0) and sorts first.
         _seedPool(pm, router, address(0), address(swa));

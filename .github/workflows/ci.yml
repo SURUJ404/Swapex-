@@ -31,7 +31,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
+      # lib/ is gitignored, so every dependency is installed fresh and pinned by tag.
       - run: forge install foundry-rs/forge-std --no-git
+      - run: forge install OpenZeppelin/openzeppelin-contracts@v5.2.0 --no-git
       - run: forge build
       - run: forge build --sizes || echo "::warning::PoolManager exceeds EIP-170 by design (deployed locally with anvil --code-size-limit 131072); size gate relaxed to match deployment target"
       - run: forge test -vv
+      # signature / permit code is fuzzed far harder than the rest of the suite (>= 5000 runs).
+      - run: forge test --match-contract AllowanceTransferTest --fuzz-runs 5000

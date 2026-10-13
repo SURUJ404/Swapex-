@@ -6,13 +6,19 @@ import {currency, isNative} from "../types/Currency.sol";
 import {BalanceDelta, amount0, amount1} from "../types/BalanceDelta.sol";
 import {PoolKey} from "../types/PoolKey.sol";
 import {TickMath} from "../../libraries/TickMath.sol";
+import {AllowanceTransfer} from "./AllowanceTransfer.sol";
 
 /// @notice User-facing periphery: the single contract that opens `unlock` sessions and settles /
 ///         takes on the user's behalf, so callers never write a callback or manage deltas. For an
-///         ERC-20 input the user approves this router; for a native-ETH input the user sends
-///         `msg.value`. Output always goes to the chosen recipient.
+///         ERC-20 input the user grants a bounded allowance through `AllowanceTransfer` (either a
+///         one-time EIP-2612 `permit` on the token, or `approve(allowanceTransfer)` once) and then
+///         a per-spender grant the router can spend until it expires; for a native-ETH input the
+///         user sends `msg.value`. Output always goes to the chosen recipient.
 contract Router is IUnlockCallback {
     PoolManager public immutable pm;
+    /// @notice the bounded-allowance contract every ERC-20 input is pulled through, so the router
+    ///         never needs an unlimited, never-expiring ERC-20 approval of its own.
+    AllowanceTransfer public immutable at;
 
     // ---------------------------------------------------------------- per-session state
     // one operation per external call; the manager's unlock lock already forbids concurrency, so
@@ -40,6 +46,7 @@ contract Router is IUnlockCallback {
     error PathCurrenciesDisjoint();
     error InsufficientOutputAmount(int256 amountOut, uint256 minAmountOut);
     error InsufficientPositionLiquidity(uint128 requested, uint128 available);
+    error InvalidPermitSpender(address expected, address actual);
 
     // ---------------------------------------------------------------- position registry
     // The manager keys positions by the *caller* of `modifyLiquidity` (this router), so every
@@ -49,8 +56,9 @@ contract Router is IUnlockCallback {
     // future work; for the single-provider demo frontend this is sufficient).
     mapping(address => mapping(bytes32 => uint128)) private _positionLiquidity;
 
-    constructor(PoolManager _pm) {
+    constructor(PoolManager _pm, AllowanceTransfer _at) {
         pm = _pm;
+        at = _at;
     }
 
     /// @notice initialize a pool (thin passthrough so tests/front-ends can use the router alone).
@@ -66,6 +74,46 @@ contract Router is IUnlockCallback {
         payable
         returns (BalanceDelta)
     {
+        _payer = msg.sender;
+        _recipient = recipient;
+        _singleKey = key;
+        _singleParams = sp;
+        _minOut = minAmountOut;
+        _op = OP_SINGLE;
+        delete _pathKeys;
+        pm.unlock("");
+        return _swapDelta;
+    }
+
+    /// @notice exact-input single swap that submits the payer's signed allowance grant
+    ///         (EIP-712, see `AllowanceTransfer.permit`) in the *same* transaction, so there is no
+    ///         window between approving and swapping.
+    ///
+    ///         If the grant's nonce was already consumed — a relayer or attacker submitted the same
+    ///         signed permit first — this is not an error: the grant it carried is already in
+    ///         effect, so the swap proceeds against the allowance it established. A front-run can
+    ///         cost the original submitter gas, but it can neither steal the grant nor invalidate
+    ///         it, and it can never turn a swap that would otherwise revert into one that
+    ///         succeeds: every other failure (expired signature deadline, wrong signer, expiry,
+    ///         insufficient allowance) still reverts. `permitSingle.spender` must be this router.
+    function exactInputSingleWithPermit(
+        PoolKey memory key,
+        SwapParams memory sp,
+        address recipient,
+        uint256 minAmountOut,
+        AllowanceTransfer.PermitSingle memory permitSingle,
+        bytes calldata sig,
+        uint256 sigDeadline
+    ) external payable returns (BalanceDelta) {
+        if (permitSingle.spender != address(this)) {
+            revert InvalidPermitSpender(address(this), permitSingle.spender);
+        }
+        // a native input is paid from msg.value and needs no grant, so don't burn a nonce on it.
+        currency input = sp.zeroForOne ? key.currency0 : key.currency1;
+        if (!isNative(input) && !at.isNonceUsed(msg.sender, permitSingle.details.nonce)) {
+            at.permit(msg.sender, permitSingle, sig, sigDeadline);
+        }
+
         _payer = msg.sender;
         _recipient = recipient;
         _singleKey = key;
@@ -226,7 +274,9 @@ contract Router is IUnlockCallback {
                 // native input: the user's msg.value is already held by this router
                 pm.settle{value: amt}(c);
             } else {
-                c.transferFrom(_payer, address(this), amt); // payer approved this router
+                // pull through the bounded-allowance contract: the payer granted *this router* an
+                // allowance there, and this router holds its own ERC-20 approval to the manager.
+                at.transferFrom(_payer, address(this), amt, currency.unwrap(c));
                 c.approve(address(pm), amt); // let the manager pull from the router
                 pm.settle(c);
             }
