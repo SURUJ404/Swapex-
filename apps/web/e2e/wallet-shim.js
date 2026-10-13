@@ -52,6 +52,9 @@
         case 'wallet_addEthereumChain':
           return null;
         case 'eth_signTypedData_v4': {
+          // hold the "prompt" open briefly so swap-grant.spec.js can observe the in-page
+          // signing summary while the wallet would be asking for confirmation
+          await new Promise((r) => setTimeout(r, 1500));
           const payload = JSON.parse(params[1]);
           const { EIP712Domain: _eip712Domain, ...types } = payload.types;
           return getWallet()._signTypedData(payload.domain, types, payload.message);
