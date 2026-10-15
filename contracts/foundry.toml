@@ -22,3 +22,18 @@ runs = 512
 [profile.default.invariant]
 runs = 64
 depth = 30
+
+# CI profile: identical compiler settings, harder sampling. Local runs keep the fast profile
+# above; CI sets FOUNDRY_PROFILE=ci so a green build means 2x the fuzz runs and 2x both
+# invariant dimensions, not 512/64/30. (forge has no --invariant-runs flag, so the only way
+# to scale invariant campaigns outside foundry.toml is a profile.)
+[profile.ci]
+# (inherits every key from profile.default; overridden below)
+
+[profile.ci.fuzz]
+runs = 1000
+
+[profile.ci.invariant]
+runs = 128
+depth = 60
+

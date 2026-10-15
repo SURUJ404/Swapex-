@@ -1,7 +1,13 @@
 [
   {
     "type": "constructor",
-    "inputs": [],
+    "inputs": [
+      {
+        "name": "initialOwner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
     "stateMutability": "nonpayable"
   },
   {
@@ -16,6 +22,13 @@
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "acceptOwnership",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -181,6 +194,11 @@
     "name": "getCurrencyDelta",
     "inputs": [
       {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
         "name": "c",
         "type": "address",
         "internalType": "currency"
@@ -240,6 +258,67 @@
       },
       {
         "name": "feeGrowthGlobal1X128",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getFeeGrowthInside",
+    "inputs": [
+      {
+        "name": "key",
+        "type": "tuple",
+        "internalType": "struct PoolKey",
+        "components": [
+          {
+            "name": "currency0",
+            "type": "address",
+            "internalType": "currency"
+          },
+          {
+            "name": "currency1",
+            "type": "address",
+            "internalType": "currency"
+          },
+          {
+            "name": "fee",
+            "type": "uint24",
+            "internalType": "uint24"
+          },
+          {
+            "name": "tickSpacing",
+            "type": "int24",
+            "internalType": "int24"
+          },
+          {
+            "name": "hooks",
+            "type": "address",
+            "internalType": "address"
+          }
+        ]
+      },
+      {
+        "name": "tickLower",
+        "type": "int24",
+        "internalType": "int24"
+      },
+      {
+        "name": "tickUpper",
+        "type": "int24",
+        "internalType": "int24"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "feeGrowthInside0X128",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "feeGrowthInside1X128",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -736,6 +815,19 @@
   },
   {
     "type": "function",
+    "name": "pendingOwner",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "pools",
     "inputs": [
       {
@@ -748,7 +840,7 @@
       {
         "name": "slot0",
         "type": "tuple",
-        "internalType": "struct PoolManager.Slot0",
+        "internalType": "struct Slot0",
         "components": [
           {
             "name": "sqrtPriceX96",
@@ -794,6 +886,13 @@
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "renounceOwnership",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -1086,6 +1185,19 @@
   },
   {
     "type": "function",
+    "name": "transferOwnership",
+    "inputs": [
+      {
+        "name": "newOwner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "unlock",
     "inputs": [
       {
@@ -1235,6 +1347,44 @@
   },
   {
     "type": "event",
+    "name": "OwnershipTransferStarted",
+    "inputs": [
+      {
+        "name": "previousOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "OwnershipTransferred",
+    "inputs": [
+      {
+        "name": "previousOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "newOwner",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "SetProtocolFee",
     "inputs": [
       {
@@ -1342,6 +1492,11 @@
   },
   {
     "type": "error",
+    "name": "InvalidLpFee",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "InvalidPriceLimit",
     "inputs": []
   },
@@ -1368,11 +1523,6 @@
   {
     "type": "error",
     "name": "LiquidityUnderflow",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "LiquidityZero",
     "inputs": []
   },
   {
@@ -1407,13 +1557,30 @@
   },
   {
     "type": "error",
-    "name": "NotOwner",
+    "name": "NotUnlocked",
     "inputs": []
   },
   {
     "type": "error",
-    "name": "NotUnlocked",
-    "inputs": []
+    "name": "OwnableInvalidOwner",
+    "inputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "OwnableUnauthorizedAccount",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",
@@ -1435,11 +1602,6 @@
         "internalType": "uint160"
       }
     ]
-  },
-  {
-    "type": "error",
-    "name": "PriceUnderflow",
-    "inputs": []
   },
   {
     "type": "error",
@@ -1496,6 +1658,11 @@
   {
     "type": "error",
     "name": "TicksNotOrdered",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "TransferShortfall",
     "inputs": []
   },
   {

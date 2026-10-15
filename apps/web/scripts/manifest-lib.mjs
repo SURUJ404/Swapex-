@@ -26,7 +26,9 @@ export function readBroadcastCreates(chainId) {
   const path = join(CONTRACTS_DIR, 'broadcast', 'Deploy.s.sol', String(chainId), 'run-latest.json')
   const run = JSON.parse(readFileSync(path, 'utf8'))
   const creates = (run.transactions || [])
-    .filter((tx) => tx.transactionType === 'CREATE' && tx.contractName && tx.contractAddress)
+    // CREATE2 too: Deploy.s.sol deploys the linked SwapLogic library with CREATE2 before the
+    // contracts that reference it, and it belongs in the manifest like everything else.
+    .filter((tx) => ['CREATE', 'CREATE2'].includes(tx.transactionType) && tx.contractName && tx.contractAddress)
     .map((tx) => ({ name: tx.contractName, address: ethers.utils.getAddress(tx.contractAddress) }))
   if (creates.length === 0) throw new Error(`no CREATE transactions in ${path}`)
   return creates

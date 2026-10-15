@@ -5,8 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { addTransaction, setTransactionStatus, getTransactions } from '../lib/txHistory'
 
 // Crypto G.2 tail: "Never store signatures or approvals in localStorage."
-// The app's only storage writers are lib/txHistory.js (tx hashes + labels) and the legacy
-// src/contexts/LocalStorage.js (UI prefs). This suite enforces that from two directions:
+// The app's only storage writer is lib/txHistory.js (tx hashes + labels); the legacy
+// src/contexts/LocalStorage.js writer went away with the rest of the old Uniswap V1 tree.
+// This suite enforces that from two directions:
 //   1. runtime: what txHistory actually writes contains only {hash,label,status,addedAt}
 //   2. policy:  no other shipped source file may call localStorage.setItem, and no
 //               storage writer may mention signature material at all
@@ -16,7 +17,6 @@ import { addTransaction, setTransactionStatus, getTransactions } from '../lib/tx
 const WEB_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..')
 const ALLOWED_SETITEM = new Set([
   join('lib', 'txHistory.js'),
-  join('src', 'contexts', 'LocalStorage.js'),
 ])
 const SKIP_DIRS = new Set([
   'node_modules',
@@ -64,7 +64,7 @@ describe('txHistory stores no signature or approval material', () => {
 describe('storage-write policy across the web app', () => {
   const files = walk(WEB_ROOT)
 
-  it('only the two audited writers ever touch localStorage', () => {
+  it('only the audited txHistory writer ever touches localStorage', () => {
     const offenders = []
     for (const file of files) {
       const source = readFileSync(file, 'utf8')

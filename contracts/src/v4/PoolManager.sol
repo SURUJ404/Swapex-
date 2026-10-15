@@ -7,6 +7,8 @@ import {Position} from "../libraries/Position.sol";
 import {SafeCast} from "../libraries/SafeCast.sol";
 import {SqrtPriceMath} from "../libraries/SqrtPriceMath.sol";
 import {SwapMath} from "../libraries/SwapMath.sol";
+import {SwapLogic} from "./libraries/SwapLogic.sol";
+import {Slot0, Pool} from "./libraries/PoolState.sol";
 import {Tick} from "../libraries/Tick.sol";
 import {TickBitmap} from "../libraries/TickBitmap.sol";
 import {TickMath} from "../libraries/TickMath.sol";
@@ -22,6 +24,8 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 interface IUnlockCallback {
     function unlockCallback(bytes calldata data) external returns (bytes memory);
 }
+
+
 
 struct SwapParams {
     bool zeroForOne;
@@ -39,13 +43,14 @@ struct ModifyLiquidityParams {
 ///        end of an `unlock` session via flash accounting.
 /// @dev Per-pool concentrated-liquidity math is reused verbatim from the V3 libraries. Instead of
 ///      moving tokens on every operation, each swap/liquidity change accumulates a signed
-///      per-currency delta (what the pool owes the caller, positive, or the caller owes the pool,
-///      negative) in transient storage. Inside the unlock callback the caller `settle`s negative
-///      deltas (paying tokens in) and `take`s positive deltas (withdrawing tokens). When the
-///      session closes every currency delta must be exactly zero, so multi-hop swaps across pools
-///      net out and move no tokens until the end. Native currency (address(0)) is a first-class
-///      currency: settle accepts ETH via msg.value and take sends it. Hooks and protocol fee are
-///      Phase 3 scope.
+///      delta, kept **per account and per currency**, in transient storage (what the pool owes
+///      that account, positive, or what the account owes the pool, negative). Inside the unlock
+///      callback an account `settle`s its negative deltas (paying tokens in) and `take`s its
+///      positive deltas (withdrawing tokens); it can touch only its own deltas. When the session
+///      closes every account's delta must be exactly zero, so multi-hop swaps across pools net out
+///      and move no tokens until the end, and a hook or any other contract that re-enters the
+///      manager cannot move the session locker's funds. Native currency (address(0)) is a
+///      first-class currency: settle accepts ETH via msg.value and take sends it.
 /// @dev Ownership follows OpenZeppelin's two-step transfer (F.1): protocol-fee admin
 ///      (`setProtocolFee`, `collectProtocol`) is `onlyOwner`, the owner is set at construction,
 ///      and a real deployment hands it to a TimelockController (docs/DECISIONS.md D29) so admin
@@ -80,6 +85,8 @@ contract PoolManager is Ownable2Step {
     error NoLiquidityToAccrue();
     error InsufficientClaim();
     error InvalidHookDelta();
+    error TransferShortfall();
+    error InvalidLpFee();
 
     // ---------------------------------------------------------------- events
     event Initialize(PoolId indexed id, int24 tick);
@@ -90,28 +97,7 @@ contract PoolManager is Ownable2Step {
     event ClaimMove(currency indexed id, address indexed from, address indexed to, uint256 amount);
 
     // ---------------------------------------------------------------- pool state
-    /// @dev `protocolFee` is the share (in 1e6, so 1e6 = 100%) of the lp fee that the protocol
-    ///      carves out on each swap. It does not change what the trader pays; it reduces what the
-    ///      lp accrues. It is set by the owner and defaults to 0.
-    struct Slot0 {
-        uint160 sqrtPriceX96;
-        int24 tick;
-        uint24 protocolFee;
-    }
 
-    /// @dev Nested mappings make Pool non-copyable; it lives only in storage keyed by PoolId.
-    struct Pool {
-        Slot0 slot0;
-        uint128 liquidity;
-        uint256 feeGrowthGlobal0X128;
-        uint256 feeGrowthGlobal1X128;
-        /// @notice accrued (unsettled-to-owner) protocol fees per currency.
-        uint128 protocolFees0;
-        uint128 protocolFees1;
-        mapping(int24 => Tick.Info) ticks;
-        mapping(int16 => uint256) tickBitmap;
-        mapping(bytes32 => Position.Info) positions;
-    }
 
     mapping(PoolId => Pool) public pools;
     /// @notice tokens actually held by the manager per currency (mirrors its ERC-20 balance).
@@ -123,82 +109,94 @@ contract PoolManager is Ownable2Step {
     constructor(address initialOwner) Ownable(initialOwner) {}
 
     // ---------------------------------------------------------------- flash accounting
-    /// @dev solc 0.8.26 supports only transient *value* types, not mappings, so the per-currency
-    ///      delta is addressed directly in transient storage via tstore/tload at keccak-derived
-    ///      slots (one slot per currency). Transient storage is cleared automatically at tx end.
-    bytes32 private constant _DELTA_SALT = keccak256("swapex.v4.currencyDelta");
-    /// @dev solc 0.8.26 has no high-level `transient` keyword for state variables (added in 0.8.28),
-    ///      so the reentrancy lock is also kept in transient storage at a fixed slot.
-    uint256 private constant _UNLOCKED_SLOT = 0;
-    /// @dev currencies touched this session (persistent only for the end-of-unlock net-zero sweep).
-    currency[] private _touched;
-    mapping(currency => bool) private _isTouched;
+    /// @dev Deltas are kept **per account** (the address that performed the operation or settlement),
+    ///      not per currency. A hook, a native-ETH recipient or any other contract that receives control
+    ///      while a session is open therefore only ever sees and moves its *own* delta; it can never
+    ///      `take` what the session's locker is owed or `settle` away what it owes. The session closes
+    ///      only when the number of non-zero (account, currency) deltas is zero.
+    /// @dev solc 0.8.26 supports only transient *value* types, not mappings, so each delta is addressed
+    ///      directly in transient storage via tstore/tload at a keccak-derived slot. Transient storage
+    ///      is cleared automatically at transaction end.
+    bytes32 private constant _DELTA_SALT = keccak256("swapex.v4.accountCurrencyDelta");
+    /// @dev transient slot 0 holds the current locker (the `unlock` caller); zero means locked.
+    uint256 private constant _LOCKER_SLOT = 0;
+    /// @dev transient slot 1 counts the (account, currency) pairs whose delta is currently non-zero.
+    uint256 private constant _NONZERO_COUNT_SLOT = 1;
 
-    function _deltaSlot(currency c) private pure returns (uint256 slot) {
-        // each currency maps to its own transient slot; the salt prevents cross-contract clashes
-        slot = uint256(keccak256(abi.encode(c, _DELTA_SALT)));
+    function _deltaSlot(address account, currency c) private pure returns (uint256 slot) {
+        // the salt prevents cross-contract slot clashes
+        slot = uint256(keccak256(abi.encode(account, c, _DELTA_SALT)));
     }
 
-    function _getDelta(currency c) private view returns (int256 v) {
-        uint256 slot = _deltaSlot(c);
+    function _getDelta(address account, currency c) private view returns (int256 v) {
+        uint256 slot = _deltaSlot(account, c);
         assembly ("memory-safe") {
             v := tload(slot)
         }
     }
 
-    function _setDelta(currency c, int256 v) private {
-        uint256 slot = _deltaSlot(c);
+    /// @dev write `next` over `prev` (the caller passes the value it already read) and keep the
+    ///      non-zero counter in step.
+    function _writeDelta(address account, currency c, int256 prev, int256 next) private {
+        if (prev == next) return;
+        uint256 slot = _deltaSlot(account, c);
         assembly ("memory-safe") {
-            tstore(slot, v)
+            tstore(slot, next)
+        }
+        if (prev == 0) _setNonzeroCount(_nonzeroCount() + 1);
+        else if (next == 0) _setNonzeroCount(_nonzeroCount() - 1);
+    }
+
+    /// @dev accumulate `delta` (caller-owes convention) into `account`'s delta for `c`.
+    function _accountDelta(address account, currency c, int256 delta) private {
+        if (delta == 0) return;
+        int256 prev = _getDelta(account, c);
+        _writeDelta(account, c, prev, prev + delta);
+    }
+
+    function _nonzeroCount() private view returns (uint256 n) {
+        uint256 slot = _NONZERO_COUNT_SLOT;
+        assembly ("memory-safe") {
+            n := tload(slot)
         }
     }
 
-    function _unlocked() private view returns (bool v) {
-        uint256 slot = _UNLOCKED_SLOT;
+    function _setNonzeroCount(uint256 n) private {
+        uint256 slot = _NONZERO_COUNT_SLOT;
         assembly ("memory-safe") {
-            v := tload(slot)
+            tstore(slot, n)
         }
     }
 
-    function _setUnlocked(bool v) private {
-        uint256 slot = _UNLOCKED_SLOT;
+    function _locker() private view returns (address a) {
+        uint256 slot = _LOCKER_SLOT;
         assembly ("memory-safe") {
-            tstore(slot, v)
+            a := tload(slot)
+        }
+    }
+
+    function _setLocker(address a) private {
+        uint256 slot = _LOCKER_SLOT;
+        assembly ("memory-safe") {
+            tstore(slot, a)
         }
     }
 
     modifier onlyUnlocked() {
-        if (!_unlocked()) revert NotUnlocked();
+        if (_locker() == address(0)) revert NotUnlocked();
         _;
     }
 
     // ---------------------------------------------------------------- unlock session
     /// @notice open a flash-accounting session; `msg.sender` must implement IUnlockCallback.
-    /// @dev reverts unless every currency delta netted to zero before the session closes.
+    /// @dev reverts unless every account's delta for every currency netted to zero before the session
+    ///      closes (including deltas created by hooks or other contracts that re-entered the manager).
     function unlock(bytes calldata data) external returns (bytes memory result) {
-        if (_unlocked()) revert AlreadyUnlocked();
-        _setUnlocked(true);
+        if (_locker() != address(0)) revert AlreadyUnlocked();
+        _setLocker(msg.sender);
         result = IUnlockCallback(msg.sender).unlockCallback(data);
-
-        // flash accounting: every touched currency must have a zero delta before we release
-        uint256 n = _touched.length;
-        for (uint256 i = 0; i < n; i++) {
-            currency c = _touched[i];
-            if (_getDelta(c) != 0) revert UnsettledDelta();
-            delete _isTouched[c]; // reset the flag for the next session
-        }
-        delete _touched;
-        _setUnlocked(false);
-    }
-
-    /// @dev accumulate `delta` (caller-owes convention) for `c`, recording it as touched.
-    function _accountDelta(currency c, int256 delta) private {
-        if (delta == 0) return;
-        _setDelta(c, _getDelta(c) + delta);
-        if (!_isTouched[c]) {
-            _isTouched[c] = true;
-            _touched.push(c);
-        }
+        if (_nonzeroCount() != 0) revert UnsettledDelta();
+        _setLocker(address(0));
     }
 
     /// @dev burn `amount` of a hook's ERC-6909 claims to fund its donation. The claims are backed
@@ -225,7 +223,10 @@ contract PoolManager is Ownable2Step {
         returns (int24 tick)
     {
         if (currency.unwrap(key.currency0) >= currency.unwrap(key.currency1)) revert CurrencyNotSorted();
-        if (key.tickSpacing <= 0) revert InvalidTickSpacing();
+        // spacing is bounded exactly like the V3 factory (keeps `(tick / spacing) * spacing` inside int24)
+        if (key.tickSpacing <= 0 || key.tickSpacing >= 16384) revert InvalidTickSpacing();
+        // a static fee must leave room for the swap input (`1e6 - fee` is used as a divisor/multiplier)
+        if (key.fee >= 1_000_000) revert InvalidLpFee();
         address h = key.hooks;
         if (h != address(0)) Hooks.validate(h);
         PoolId id = key.toPoolId();
@@ -287,25 +288,7 @@ contract PoolManager is Ownable2Step {
     }
 
     // ---------------------------------------------------------------- swap
-    struct SwapState {
-        int256 amountSpecifiedRemaining;
-        int256 amountCalculated;
-        uint160 sqrtPriceX96;
-        int24 tick;
-        uint256 feeGrowthGlobalX128; // growth of the input token
-        uint128 liquidity;
-        uint256 protocolFees; // protocol's cut of the input-token fees, accrued this swap
-    }
 
-    struct StepComputations {
-        uint160 sqrtPriceStartX96;
-        int24 tickNext;
-        bool initialized;
-        uint160 sqrtPriceNextX96;
-        uint256 amountIn;
-        uint256 amountOut;
-        uint256 feeAmount;
-    }
 
     /// @notice swap within one pool; the resulting delta is accumulated into flash accounting.
     /// @return callerDelta caller-owes convention (positive = pool owes caller).
@@ -339,141 +322,51 @@ contract PoolManager is Ownable2Step {
             }
             if (Hooks.hasPermission(h, Hooks.DYNAMIC_FEE_FLAG)) {
                 lpFee = IHooks(h).getSwapFee(key);
+                if (lpFee >= 1_000_000) revert InvalidLpFee();
             }
         }
 
-        Slot0 memory slot0Start = pool.slot0;
-        bool zeroForOne = params.zeroForOne;
-        if (
-            zeroForOne
-                ? !(params.sqrtPriceLimitX96 < slot0Start.sqrtPriceX96 && params.sqrtPriceLimitX96 > TickMath.MIN_SQRT_RATIO)
-                : !(params.sqrtPriceLimitX96 > slot0Start.sqrtPriceX96 && params.sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO)
-        ) revert InvalidPriceLimit();
-
-        bool exactInput = params.amountSpecified > 0;
-        uint24 protocolFee = slot0Start.protocolFee;
-        SwapState memory state = SwapState({
-            amountSpecifiedRemaining: params.amountSpecified,
-            amountCalculated: 0,
-            sqrtPriceX96: slot0Start.sqrtPriceX96,
-            tick: slot0Start.tick,
-            feeGrowthGlobalX128: zeroForOne ? pool.feeGrowthGlobal0X128 : pool.feeGrowthGlobal1X128,
-            liquidity: pool.liquidity,
-            protocolFees: 0
-        });
-
-        while (state.amountSpecifiedRemaining != 0 && state.sqrtPriceX96 != params.sqrtPriceLimitX96) {
-            StepComputations memory step;
-            step.sqrtPriceStartX96 = state.sqrtPriceX96;
-
-            (step.tickNext, step.initialized) =
-                pool.tickBitmap.nextInitializedTickWithinOneWord(state.tick, key.tickSpacing, zeroForOne);
-
-            // the bitmap does not know the global bounds
-            if (step.tickNext < TickMath.MIN_TICK) step.tickNext = TickMath.MIN_TICK;
-            else if (step.tickNext > TickMath.MAX_TICK) step.tickNext = TickMath.MAX_TICK;
-
-            step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.tickNext);
-
-            (state.sqrtPriceX96, step.amountIn, step.amountOut, step.feeAmount) = SwapMath.computeSwapStep(
-                state.sqrtPriceX96,
-                (zeroForOne ? step.sqrtPriceNextX96 < params.sqrtPriceLimitX96 : step.sqrtPriceNextX96 > params.sqrtPriceLimitX96)
-                    ? params.sqrtPriceLimitX96
-                    : step.sqrtPriceNextX96,
-                state.liquidity,
-                state.amountSpecifiedRemaining,
-                lpFee
-            );
-
-            if (exactInput) {
-                state.amountSpecifiedRemaining -= (step.amountIn + step.feeAmount).toInt256();
-                state.amountCalculated -= step.amountOut.toInt256();
-            } else {
-                state.amountSpecifiedRemaining += step.amountOut.toInt256();
-                state.amountCalculated += (step.amountIn + step.feeAmount).toInt256();
-            }
-
-            // carve the protocol's cut out of the fee before accruing the lp portion. The protocol
-            // share is a fraction (protocolFee/1e6) of the fee and does not change the trader's
-            // cost (amountSpecified above already used the full feeAmount); it only reduces what
-            // the lp accrues. The protocol portion accrues in the input-token units.
-            if (protocolFee > 0) {
-                uint256 protocolPortion = FullMath.mulDiv(step.feeAmount, protocolFee, PROTOCOL_FEE_DENOMINATOR);
-                step.feeAmount -= protocolPortion;
-                state.protocolFees += protocolPortion;
-            }
-
-            // fees only accrue to in-range liquidity; wrap-around is intended
-            if (state.liquidity > 0) {
-                unchecked {
-                    state.feeGrowthGlobalX128 += FullMath.mulDiv(step.feeAmount, 1 << 128, state.liquidity);
-                }
-            }
-
-            if (state.sqrtPriceX96 == step.sqrtPriceNextX96) {
-                // reached the next tick: cross it if it is initialised
-                if (step.initialized) {
-                    int128 liquidityNet = pool.ticks.cross(
-                        step.tickNext,
-                        zeroForOne ? state.feeGrowthGlobalX128 : pool.feeGrowthGlobal0X128,
-                        zeroForOne ? pool.feeGrowthGlobal1X128 : state.feeGrowthGlobalX128
-                    );
-                    // moving left removes what moving right would add
-                    if (zeroForOne) liquidityNet = -liquidityNet;
-                    state.liquidity = LiquidityMath.addDelta(state.liquidity, liquidityNet);
-                }
-                state.tick = zeroForOne ? step.tickNext - 1 : step.tickNext;
-            } else if (state.sqrtPriceX96 != step.sqrtPriceStartX96) {
-                // price moved inside the range: recompute the tick
-                state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
-            }
-        }
-
-        // ---- effects
-        pool.slot0.sqrtPriceX96 = state.sqrtPriceX96;
-        if (state.tick != slot0Start.tick) pool.slot0.tick = state.tick;
-        if (pool.liquidity != state.liquidity) pool.liquidity = state.liquidity;
-        if (zeroForOne) pool.feeGrowthGlobal0X128 = state.feeGrowthGlobalX128;
-        else pool.feeGrowthGlobal1X128 = state.feeGrowthGlobalX128;
-        if (state.protocolFees > 0) {
-            // the protocol's cut is denominated in the input token (token0 when zeroForOne)
-            if (zeroForOne) pool.protocolFees0 += state.protocolFees.toUint128();
-            else pool.protocolFees1 += state.protocolFees.toUint128();
-        }
-
-        // V3-style amounts: positive = caller owes the pool, negative = pool owes the caller
-        (int256 amount0Raw, int256 amount1Raw) = zeroForOne == exactInput
-            ? (params.amountSpecified - state.amountSpecifiedRemaining, state.amountCalculated)
-            : (state.amountCalculated, params.amountSpecified - state.amountSpecifiedRemaining);
+        SwapLogic.Result memory r = SwapLogic.run(pool, key.tickSpacing, params.zeroForOne, params.amountSpecified, params.sqrtPriceLimitX96, lpFee);
 
         // flip to the caller-owes convention used by currencyDelta (positive = pool owes caller)
-        callerDelta = toBalanceDelta(-amount0Raw, -amount1Raw);
-        _accountDelta(key.currency0, -amount0Raw);
-        _accountDelta(key.currency1, -amount1Raw);
+        callerDelta = toBalanceDelta(-r.amount0Raw, -r.amount1Raw);
+        _accountDelta(msg.sender, key.currency0, -r.amount0Raw);
+        _accountDelta(msg.sender, key.currency1, -r.amount1Raw);
 
-        // opt-in hook donation (D21): a hook flagged BEFORE_SWAP_DELTA may return a non-positive
-        // delta it donates to the pool, funded by burning its ERC-6909 claims. The donation is
-        // credited to the caller, who therefore settles less. A positive component would mint free
-        // claims and is rejected. The hook's claims are already backed by tokens in `reserves`, so
-        // burning them frees real tokens to the pool and keeps net-zero + solvency intact.
-        if (h != address(0) && Hooks.hasPermission(h, Hooks.BEFORE_SWAP_DELTA_FLAG)) {
-            BalanceDelta hd = IHooks(h).beforeSwapDelta(key, params, hookData);
-            int256 hd0 = hd.amount0();
-            int256 hd1 = hd.amount1();
-            if (hd0 > 0 || hd1 > 0) revert InvalidHookDelta();
-            if (hd0 < 0) _burnHookClaim(key.currency0, h, uint256(-hd0));
-            if (hd1 < 0) _burnHookClaim(key.currency1, h, uint256(-hd1));
-            // credit the caller: they owe less because the hook donated (negate the hook's delta)
-            callerDelta = toBalanceDelta(callerDelta.amount0() - hd0, callerDelta.amount1() - hd1);
-            _accountDelta(key.currency0, -hd0);
-            _accountDelta(key.currency1, -hd1);
+        if (h != address(0)) {
+            if (Hooks.hasPermission(h, Hooks.BEFORE_SWAP_DELTA_FLAG)) {
+                callerDelta = _applyHookSwapDelta(key, params, hookData, callerDelta);
+            }
+            if (Hooks.hasPermission(h, Hooks.AFTER_SWAP_FLAG)) {
+                IHooks(h).afterSwap(key, params, callerDelta, hookData);
+            }
         }
 
-        if (h != address(0) && Hooks.hasPermission(h, Hooks.AFTER_SWAP_FLAG)) {
-            IHooks(h).afterSwap(key, params, callerDelta, hookData);
-        }
+        emit Swap(id, -r.amount0Raw, -r.amount1Raw, r.sqrtPriceX96, r.liquidity, r.tick);
+    }
 
-        emit Swap(id, -amount0Raw, -amount1Raw, state.sqrtPriceX96, state.liquidity, state.tick);
+    /// @dev opt-in hook donation (D21): a hook flagged BEFORE_SWAP_DELTA may return a non-positive
+    ///      delta it donates to the pool, funded by burning its ERC-6909 claims. The donation is
+    ///      credited to the caller, who therefore settles less. A positive component would mint free
+    ///      claims and is rejected. The hook's claims are already backed by tokens in `reserves`, so
+    ///      burning them frees real tokens to the pool and keeps net-zero + solvency intact.
+    function _applyHookSwapDelta(
+        PoolKey memory key,
+        SwapParams memory params,
+        bytes memory hookData,
+        BalanceDelta callerDelta
+    ) private returns (BalanceDelta) {
+        address h = key.hooks;
+        BalanceDelta hd = IHooks(h).beforeSwapDelta(key, params, hookData);
+        int256 hd0 = hd.amount0();
+        int256 hd1 = hd.amount1();
+        if (hd0 > 0 || hd1 > 0) revert InvalidHookDelta();
+        if (hd0 < 0) _burnHookClaim(key.currency0, h, uint256(-hd0));
+        if (hd1 < 0) _burnHookClaim(key.currency1, h, uint256(-hd1));
+        // credit the caller: they owe less because the hook donated (negate the hook's delta)
+        _accountDelta(msg.sender, key.currency0, -hd0);
+        _accountDelta(msg.sender, key.currency1, -hd1);
+        return toBalanceDelta(callerDelta.amount0() - hd0, callerDelta.amount1() - hd1);
     }
 
     // ---------------------------------------------------------------- donate
@@ -507,8 +400,8 @@ contract PoolManager is Ownable2Step {
 
         // the donor owes the manager both donated amounts (caller-owes: negative = caller owes pool)
         callerDelta = toBalanceDelta(-amount0.toInt256(), -amount1.toInt256());
-        _accountDelta(key.currency0, callerDelta.amount0());
-        _accountDelta(key.currency1, callerDelta.amount1());
+        _accountDelta(msg.sender, key.currency0, callerDelta.amount0());
+        _accountDelta(msg.sender, key.currency1, callerDelta.amount1());
     }
 
     // ---------------------------------------------------------------- liquidity
@@ -576,8 +469,8 @@ contract PoolManager is Ownable2Step {
         // caller-owes convention: negate principal (mint => caller owes => negative), fees are owed to caller
         callerDelta = toBalanceDelta(-principal0, -principal1);
         feesAccrued = toBalanceDelta(fees0, fees1);
-        _accountDelta(key.currency0, -principal0 + fees0);
-        _accountDelta(key.currency1, -principal1 + fees1);
+        _accountDelta(msg.sender, key.currency0, -principal0 + fees0);
+        _accountDelta(msg.sender, key.currency1, -principal1 + fees1);
 
         if (h != address(0)) {
             if (isAdd && Hooks.hasPermission(h, Hooks.AFTER_ADD_LIQUIDITY_FLAG)) {
@@ -601,16 +494,11 @@ contract PoolManager is Ownable2Step {
         Position.Info storage position = pool.positions.get(positionOwner, params.tickLower, params.tickUpper);
         uint256 fg0 = pool.feeGrowthGlobal0X128;
         uint256 fg1 = pool.feeGrowthGlobal1X128;
-        uint128 maxLiqPerTick = Tick.tickSpacingToMaxLiquidityPerTick(key.tickSpacing);
 
-        bool flippedLower;
-        bool flippedUpper;
-        if (ld != 0) {
-            flippedLower = pool.ticks.update(params.tickLower, tick, ld, fg0, fg1, false, maxLiqPerTick);
-            flippedUpper = pool.ticks.update(params.tickUpper, tick, ld, fg0, fg1, true, maxLiqPerTick);
-            if (flippedLower) pool.tickBitmap.flipTick(params.tickLower, key.tickSpacing);
-            if (flippedUpper) pool.tickBitmap.flipTick(params.tickUpper, key.tickSpacing);
-        }
+        // the tick crossing lives in its own frame: its `ticks.update` inlines are the deepest
+        // part of this contract, and keeping them out of ours is what keeps the stack legal
+        (bool flippedLower, bool flippedUpper) =
+            ld == 0 ? (false, false) : _crossTicks(pool, key, params, ld, tick, fg0, fg1);
 
         (uint256 inside0, uint256 inside1) = pool.ticks.getFeeGrowthInside(params.tickLower, params.tickUpper, tick, fg0, fg1);
 
@@ -623,11 +511,31 @@ contract PoolManager is Ownable2Step {
         fees0 = int256(uint256(position.tokensOwed0 - owed0Before));
         fees1 = int256(uint256(position.tokensOwed1 - owed1Before));
 
-        // a removed boundary tick no longer needs its storage
+        // a removed boundary tick no longer needs its storage. This must happen *after*
+        // `getFeeGrowthInside` above: clearing zeroes the tick's `feeGrowthOutside`, which that
+        // read depends on.
         if (ld < 0) {
             if (flippedLower) pool.ticks.clear(params.tickLower);
             if (flippedUpper) pool.ticks.clear(params.tickUpper);
         }
+    }
+
+    /// @dev apply `ld` to both boundary ticks and keep the bitmap in step. Returns which of them
+    ///      flipped (liquidity gross crossed zero) so the caller can reclaim cleared ticks.
+    function _crossTicks(
+        Pool storage pool,
+        PoolKey memory key,
+        ModifyLiquidityParams memory params,
+        int128 ld,
+        int24 tick,
+        uint256 fg0,
+        uint256 fg1
+    ) private returns (bool flippedLower, bool flippedUpper) {
+        uint128 maxLiqPerTick = Tick.tickSpacingToMaxLiquidityPerTick(key.tickSpacing);
+        flippedLower = pool.ticks.update(params.tickLower, tick, ld, fg0, fg1, false, maxLiqPerTick);
+        flippedUpper = pool.ticks.update(params.tickUpper, tick, ld, fg0, fg1, true, maxLiqPerTick);
+        if (flippedLower) pool.tickBitmap.flipTick(params.tickLower, key.tickSpacing);
+        if (flippedUpper) pool.tickBitmap.flipTick(params.tickUpper, key.tickSpacing);
     }
 
     function _checkTicks(int24 tickLower, int24 tickUpper, int24 tickSpacing) private pure {
@@ -643,34 +551,44 @@ contract PoolManager is Ownable2Step {
     }
 
     // ---------------------------------------------------------------- settlement
+    /// @dev pull `amount` of ERC-20 `c` from `from` and require that the manager's balance really grew by
+    ///      at least `amount`. `reserves` is only ever credited with tokens that actually arrived, so a
+    ///      fee-on-transfer (or otherwise lying) token can make a settlement revert but can never make the
+    ///      manager insolvent.
+    function _pull(currency c, address from, uint256 amount) private {
+        uint256 balanceBefore = c.balanceOf();
+        c.transferFrom(from, address(this), amount);
+        if (c.balanceOf() < balanceBefore + amount) revert TransferShortfall();
+    }
+
     /// @notice pay the amount owed for `c` and clear the delta. For an ERC-20 this pulls the
     ///         tokens from the caller via `transferFrom`; for the native currency the caller must
     ///         send exactly the owed amount as `msg.value` with this call (the ETH is already in
     ///         the manager when the body runs).
     function settle(currency c) external payable onlyUnlocked returns (uint256 amount) {
-        int256 delta = _getDelta(c);
+        int256 delta = _getDelta(msg.sender, c);
         if (delta >= 0) revert DeltaNotNegative();
         amount = uint256(-delta);
         if (c.isNative()) {
             if (msg.value != amount) revert NativeSettleAmountMismatch();
         } else {
             if (msg.value != 0) revert UnexpectedEth();
-            c.transferFrom(msg.sender, address(this), amount);
+            _pull(c, msg.sender, amount);
         }
         reserves[c] += amount;
-        _setDelta(c, 0);
+        _writeDelta(msg.sender, c, delta, 0);
     }
 
     /// @notice withdraw `amount` of `c` that the pool owes the caller; reduces the positive delta.
     ///         Sends ETH when `c` is the native currency. Effects are applied before the transfer
     ///         (checks-effects-interactions), so a re-entering recipient sees the updated state.
     function take(currency c, address to, uint256 amount) external onlyUnlocked {
-        int256 delta = _getDelta(c);
+        int256 delta = _getDelta(msg.sender, c);
         if (delta < int256(amount)) revert InsufficientTake();
         reserves[c] -= amount;
         unchecked {
             // delta >= amount > 0 was checked above, so the subtraction cannot go negative
-            _setDelta(c, delta - int256(amount));
+            _writeDelta(msg.sender, c, delta, delta - int256(amount));
         }
         c.transfer(to, amount);
     }
@@ -689,7 +607,7 @@ contract PoolManager is Ownable2Step {
     /// @notice deposit `amount` of `c` (pulled from the caller) and mint that many claims to `to`.
     ///         Standalone (not part of an unlock): it only moves the caller's tokens for claims.
     function mint(currency c, address to, uint256 amount) external {
-        c.transferFrom(msg.sender, address(this), amount);
+        _pull(c, msg.sender, amount);
         reserves[c] += amount;
         claims[c][to] += amount;
         emit ClaimMove(c, address(0), to, amount);
@@ -707,24 +625,24 @@ contract PoolManager is Ownable2Step {
     /// @notice within an unlock: cover the caller's negative delta for `c` by burning their claims
     ///         (the tokens already sit in the manager backing those claims). No token transfer.
     function settleViaClaim(currency c) external onlyUnlocked returns (uint256 amount) {
-        int256 delta = _getDelta(c);
+        int256 delta = _getDelta(msg.sender, c);
         if (delta >= 0) revert DeltaNotNegative();
         amount = uint256(-delta);
         if (claims[c][msg.sender] < amount) revert InsufficientClaim();
         claims[c][msg.sender] -= amount;
-        _setDelta(c, 0);
+        _writeDelta(msg.sender, c, delta, 0);
         emit ClaimMove(c, msg.sender, address(0), amount);
     }
 
     /// @notice within an unlock: cover `amount` of the caller's positive delta for `c` by minting
     ///         claims to `to` instead of transferring tokens out. No token transfer.
     function takeViaClaim(currency c, address to, uint256 amount) external onlyUnlocked {
-        int256 delta = _getDelta(c);
+        int256 delta = _getDelta(msg.sender, c);
         if (delta < int256(amount)) revert InsufficientTake();
         claims[c][to] += amount;
         unchecked {
             // delta >= amount > 0 was checked above, so the subtraction cannot go negative
-            _setDelta(c, delta - int256(amount));
+            _writeDelta(msg.sender, c, delta, delta - int256(amount));
         }
         emit ClaimMove(c, address(0), to, amount);
     }
@@ -744,7 +662,25 @@ contract PoolManager is Ownable2Step {
         return (pool.feeGrowthGlobal0X128, pool.feeGrowthGlobal1X128);
     }
 
-    function getCurrencyDelta(currency c) external view returns (int256) {
-        return _getDelta(c);
+    /// @notice the fee growth *inside* `[tickLower, tickUpper]` as of the pool's current tick —
+    ///         the same value `_updatePosition` checkpoints a position against. Exposed so
+    ///         periphery that merges many LPs into one on-chain position slot (the Router) can
+    ///         split the slot's fees back out to the individual beneficiaries (D41).
+    /// @dev    reads pool state only; safe to call at any time, including outside an unlock.
+    function getFeeGrowthInside(PoolKey memory key, int24 tickLower, int24 tickUpper)
+        external
+        view
+        returns (uint256 feeGrowthInside0X128, uint256 feeGrowthInside1X128)
+    {
+        Pool storage pool = pools[key.toPoolId()];
+        if (pool.slot0.sqrtPriceX96 == 0) revert PoolNotInitialized();
+        return pool.ticks.getFeeGrowthInside(
+            tickLower, tickUpper, pool.slot0.tick, pool.feeGrowthGlobal0X128, pool.feeGrowthGlobal1X128
+        );
+    }
+
+    /// @notice the open delta `account` holds for `c` in the current session (caller-owes convention).
+    function getCurrencyDelta(address account, currency c) external view returns (int256) {
+        return _getDelta(account, c);
     }
 }

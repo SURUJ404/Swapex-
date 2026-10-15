@@ -13,10 +13,10 @@ import path from 'path';
 
 const RPC = 'http://127.0.0.1:8545';
 
-const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0';
-const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9';
-const SWA = process.env.NEXT_PUBLIC_SWA || '0x0165878A594ca255338adfa4d48449f69242Eb8F';
-const SWB = process.env.NEXT_PUBLIC_SWB || '0xa513E6E4b8f2a923D98304ec87F64353C4D5C853';
+const AT = process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9';
+const ROUTER = process.env.NEXT_PUBLIC_ROUTER || '0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9';
+const SWA = process.env.NEXT_PUBLIC_SWA || '0xa513E6E4b8f2a923D98304ec87F64353C4D5C853';
+const SWB = process.env.NEXT_PUBLIC_SWB || '0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6';
 
 const provider = new ethers.providers.JsonRpcProvider(RPC);
 const at = new ethers.Contract(

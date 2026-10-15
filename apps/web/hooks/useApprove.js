@@ -5,6 +5,7 @@ import { useSigning } from '../context/SigningContext'
 import useTransact from './useTransact'
 import { useToast } from '../components/Toast'
 import { parseError } from '../lib/errors'
+import { findFreeNonce } from '../lib/nonce'
 import { REQUIRED_CHAIN_ID } from '../lib/config'
 import {
   buildPermitTypedData,
@@ -21,9 +22,8 @@ const USDT = '0xdac17f958d2ee523a2206206994597c13d831ec7'
 // Grants are bounded by amount AND expire, so they are deliberately short-lived: the spend is
 // submitted right after the grant, so an hour is generous while still capping exposure.
 const GRANT_TTL_SECONDS = 60 * 60
-// The permit nonce is an on-contract bitmap, not an account nonce: scan for the first unused
-// slot. Testnet grant counts are tiny; if the bound is ever hit the grant fails closed.
-const MAX_NONCE_SCAN = 1024
+// The permit nonce is an on-contract bitmap, not an account nonce; `findFreeNonce` (lib/nonce.js)
+// reads it a 256-bit word at a time to pick the first unused slot.
 
 /**
  * Establishes the two grants a swap or liquidity add needs, each as its own tracked step:
@@ -80,11 +80,7 @@ export default function useApprove() {
           const expiration = block.timestamp + GRANT_TTL_SECONDS
 
           // first permit slot this owner has not burned yet
-          let nonce = 0
-          while (nonce < MAX_NONCE_SCAN && (await at.isNonceUsed(owner, nonce))) nonce++
-          if (nonce >= MAX_NONCE_SCAN) {
-            throw new Error(`no free permit nonce under bound ${MAX_NONCE_SCAN}`)
-          }
+          const nonce = await findFreeNonce((word) => at.nonceBitmap(owner, word))
 
           // The domain uses the APP's required chain, not whatever the wallet reports:
           // signTypedDataWithGuard then refuses to sign if the connected chain differs,

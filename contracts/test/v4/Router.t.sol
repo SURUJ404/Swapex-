@@ -600,4 +600,45 @@ contract RouterTest is Test {
         // skipped). Real front-ends must always pass a floor; the deadline still applies.
         router.exactInputSingle(key, sp, address(this), 0, FAR_DEADLINE);
     }
+
+    // ---- multi-hop direction is derived by walking the path (two fee tiers of the SAME pair)
+    function test_exactInput_adjacentPoolsShareBothCurrencies_walksTheCurrentCurrency() public {
+        PoolKey memory k1 = _key(address(tokenA), address(tokenB)); // 0.30% / spacing 60
+        PoolKey memory k2 = PoolKey({
+            currency0: k1.currency0, currency1: k1.currency1, fee: 500, tickSpacing: 10, hooks: address(0)
+        });
+        router.initialize(k1, Q96);
+        router.initialize(k2, Q96);
+        _seed(k1);
+        router.modifyLiquidity(
+            k2, ModifyLiquidityParams({tickLower: -6000, tickUpper: 6000, liquidityDelta: 1e20}), address(this), _unbounded(), FAR_DEADLINE
+        );
+
+        PoolKey[] memory path = new PoolKey[](2);
+        path[0] = k1;
+        path[1] = k2;
+        bool aIsCurrency0 = address(tokenA) < address(tokenB);
+        uint256 a0 = tokenA.balanceOf(address(this));
+        uint256 b0 = tokenB.balanceOf(address(this));
+
+        // A -> B on pool 1, then B -> A on pool 2: the user ends with A again, minus the two fees
+        router.exactInput(path, aIsCurrency0, 1e16, address(this), 0.009e18, FAR_DEADLINE);
+
+        uint256 a1 = tokenA.balanceOf(address(this));
+        assertEq(tokenB.balanceOf(address(this)), b0, "intermediate token must net to zero");
+        assertLt(a1, a0, "two fee tiers must cost something");
+        assertGt(a1, a0 - 0.0001e18, "but only about 0.35% fees plus small impact");
+    }
+
+    function test_exactInput_disjointPath_reverts() public {
+        PoolKey memory kAB = _key(address(tokenA), address(tokenB));
+        PoolKey memory kC0 = _key(address(tokenC), address(0xdead));
+        router.initialize(kAB, Q96);
+        _seed(kAB);
+        PoolKey[] memory path = new PoolKey[](2);
+        path[0] = kAB;
+        path[1] = kC0;
+        vm.expectRevert(Router.PathCurrenciesDisjoint.selector);
+        router.exactInput(path, true, 1e18, address(this), 0, FAR_DEADLINE);
+    }
 }

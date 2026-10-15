@@ -10,8 +10,6 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Legacy Uniswap interface kept for reference; not part of the Next.js app.
-    "src/**",
   ]),
   {
     rules: {

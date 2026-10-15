@@ -16,11 +16,12 @@ import {Router} from "./Router.sol";
 
 /// @title  LimitOrders — signed, partially-fillable swap orders (EIP-712)
 /// @notice A maker signs an order off-chain — "swap exactly `amountIn` of `tokenIn` for at least
-///         `minAmountOut` of `tokenOut` on the pool with fee `fee`, pay the output to `receiver`,
-///         valid until `deadline`, identified by `nonce`" — and anyone (a filler, a relayer, the
-///         maker themselves) may execute it on-chain through the router. No order ever moves a
-///         token without the maker's signature; fills are bounded by what was signed, in full or
-///         in part, and the maker can kill any nonce with `cancel`.
+///         `minAmountOut` of `tokenOut` on the pool identified by `(tokenIn, tokenOut, fee,
+///         tickSpacing, hooks)`, pay the output to `receiver`, valid until `deadline`, identified
+///         by `nonce`" — and anyone (a filler, a relayer, the maker themselves) may execute it
+///         on-chain through the router. No order ever moves a token without the maker's signature;
+///         fills are bounded by what was signed, in full or in part, and the maker can kill any
+///         nonce with `cancel`.
 ///
 ///         Threat model (see docs/CRYPTO_DECISIONS.md A.3): a filled order must never be replayed
 ///         (nonce + per-(maker,nonce) digest binding + signed deadline + EIP-712 domain with
@@ -36,6 +37,14 @@ contract LimitOrders is EIP712 {
         address tokenIn;
         address tokenOut;
         uint24 fee;
+        /// @dev the pool's tick spacing. Part of the signed pool identity: without it a filler
+        ///      could route the fill through a same-pair, same-fee pool whose spacing the maker
+        ///      never chose (D41).
+        int24 tickSpacing;
+        /// @dev the pool's hook address (`address(0)` for a hookless pool). Part of the signed
+        ///      pool identity: a hook can skim, re-enter or gate a swap, so a maker must not have
+        ///      to trust whichever hook a filler picks (D41).
+        address hooks;
         uint256 amountIn;
         uint256 minAmountOut;
         address receiver;
@@ -60,9 +69,12 @@ contract LimitOrders is EIP712 {
     AllowanceTransfer public immutable at;
 
     // ------------------------------------------------------------------ typehashes
+    // The signed payload now names the *whole* pool key (fee + tickSpacing + hooks), not just the
+    // pair and fee, so a filler cannot substitute a pool the maker never chose (D41).
     bytes32 public constant ORDER_TYPEHASH = keccak256(
-        "Order(address maker,address tokenIn,address tokenOut,uint24 fee,uint256 amountIn,"
-        "uint256 minAmountOut,address receiver,uint48 nonce,uint48 deadline)"
+        "Order(address maker,address tokenIn,address tokenOut,uint24 fee,int24 tickSpacing,"
+        "address hooks,uint256 amountIn,uint256 minAmountOut,address receiver,uint48 nonce,"
+        "uint48 deadline)"
     );
 
     // ------------------------------------------------------------------ events
@@ -87,7 +99,10 @@ contract LimitOrders is EIP712 {
     error NativeInputNotSupported();
     error PoolMismatch();
 
-    constructor(Router _router, AllowanceTransfer _at) EIP712("Swapex LimitOrders", "1") {
+    /// @dev version "2": D41 added `tickSpacing` and `hooks` to the signed struct. The domain
+    ///      version is bumped alongside the typehash so a v1 digest can never collide with a v2
+    ///      one even for an order whose other fields are identical.
+    constructor(Router _router, AllowanceTransfer _at) EIP712("Swapex LimitOrders", "2") {
         router = _router;
         at = _at;
     }
@@ -103,6 +118,8 @@ contract LimitOrders is EIP712 {
                     order.tokenIn,
                     order.tokenOut,
                     order.fee,
+                    order.tickSpacing,
+                    order.hooks,
                     order.amountIn,
                     order.minAmountOut,
                     order.receiver,
@@ -122,9 +139,10 @@ contract LimitOrders is EIP712 {
 
     /// @notice fill `fillAmount` (base units of `tokenIn`) of `order`, authorised by the maker's
     ///         signature. Callable by anyone; the output is paid straight to `order.receiver`.
-    /// @param key   the pool to fill against; its currencies and fee must match the signed order
-    ///               (tick spacing and hooks belong to the pool the filler picked — the signed
-    ///               `minAmountOut` rate is what protects the maker, not the pool's cosmetics).
+    /// @param key   the pool to fill against. Its currencies, fee, `tickSpacing` and `hooks` must
+    ///               all equal the signed values — the whole pool identity is covered by the
+    ///               signature (D41), so a filler can never route the fill through a pool the
+    ///               maker did not choose.
     /// @param fillAmount how much of `amountIn` to execute now; may be less than `amountIn`
     ///               (partial fill), never more than what remains.
     function fillOrder(Order calldata order, PoolKey calldata key, uint256 fillAmount, bytes calldata signature)
@@ -139,11 +157,12 @@ contract LimitOrders is EIP712 {
         // "spends" native ETH has no pull path and would fail confusingly later.
         if (order.tokenIn == address(0)) revert NativeInputNotSupported();
 
-        // the pool must be the signed pair at the signed fee (both currencies, either direction).
+        // the pool must be exactly the signed one: both currencies (either direction), the signed
+        // fee, and — since D41 — the signed tickSpacing and hooks.
         address k0 = currency.unwrap(key.currency0);
         address k1 = currency.unwrap(key.currency1);
         if (
-            key.fee != order.fee
+            key.fee != order.fee || key.tickSpacing != order.tickSpacing || key.hooks != order.hooks
                 || !((k0 == order.tokenIn && k1 == order.tokenOut) || (k0 == order.tokenOut && k1 == order.tokenIn))
         ) revert PoolMismatch();
 
@@ -180,7 +199,7 @@ contract LimitOrders is EIP712 {
 
         // signed floor for *this* partial fill: the order's rate (minAmountOut per amountIn),
         // scaled linearly by fillAmount, computed in 512-bit precision (OZ Math, no overflow).
-        uint256 minOut = Math.mulDiv(order.minAmountOut, fillAmount, order.amountIn);
+        uint256 minOut = Math.mulDiv(order.minAmountOut, fillAmount, order.amountIn, Math.Rounding.Ceil);
         bool zeroForOne = k0 == order.tokenIn;
         SwapParams memory sp = SwapParams({
             zeroForOne: zeroForOne,

@@ -87,12 +87,15 @@ contract LimitOrdersTest is Test {
 
     /// @dev the canonical order every test starts from: alice sells 100 A for >= 95 B (a rate
     ///      the 1:1, 0.3%-fee pool clears with room), paid to bob, nonce 1, valid for a day.
+    ///      The pool identity is complete (fee + tickSpacing + hooks, D41) and matches `_key`.
     function _order() internal view returns (LimitOrders.Order memory) {
         return LimitOrders.Order({
             maker: alice,
             tokenIn: address(tokenA),
             tokenOut: address(tokenB),
             fee: 3000,
+            tickSpacing: 60,
+            hooks: address(0),
             amountIn: 100e18,
             minAmountOut: 95e18,
             receiver: bob,
@@ -402,6 +405,105 @@ contract LimitOrdersTest is Test {
         PoolKey memory key = _key(address(tokenA), address(tokenC)); // signed pair was A/B
         vm.expectRevert(LimitOrders.PoolMismatch.selector);
         orders.fillOrder(o, key, 100e18, sig);
+    }
+
+    // ------------------------------------------------------- signed pool identity (D41)
+
+    function test_fillOrder_tickSpacingMismatch_reverts() public {
+        LimitOrders.Order memory o = _order();
+        bytes memory sig = _signOrder(o, ALICE_PK);
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        key.tickSpacing = 10; // same pair, same fee, different spacing
+        vm.expectRevert(LimitOrders.PoolMismatch.selector);
+        orders.fillOrder(o, key, 100e18, sig);
+    }
+
+    function test_fillOrder_hooksMismatch_reverts() public {
+        LimitOrders.Order memory o = _order();
+        bytes memory sig = _signOrder(o, ALICE_PK);
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        key.hooks = address(0xBEEF); // the maker signed a hookless pool
+        vm.expectRevert(LimitOrders.PoolMismatch.selector);
+        orders.fillOrder(o, key, 100e18, sig);
+    }
+
+    function test_fillOrder_editedTickSpacingFailsTheSignatureNotJustThePoolCheck() public {
+        // the new fields sit *inside* the typed-data struct: editing them invalidates the digest
+        // before any pool lookup would matter. Supply a key that matches the edited order so the
+        // pool check passes and the signature check is what refuses it.
+        LimitOrders.Order memory o = _order();
+        bytes memory sig = _signOrder(o, ALICE_PK);
+        o.tickSpacing = 10;
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        key.tickSpacing = 10;
+        _expectInvalid(alice);
+        orders.fillOrder(o, key, 100e18, sig);
+    }
+
+    function test_fillOrder_editedHooksFailsTheSignatureNotJustThePoolCheck() public {
+        LimitOrders.Order memory o = _order();
+        bytes memory sig = _signOrder(o, ALICE_PK);
+        o.hooks = address(0xBEEF);
+        PoolKey memory key = _key(address(tokenA), address(tokenB));
+        key.hooks = address(0xBEEF);
+        _expectInvalid(alice);
+        orders.fillOrder(o, key, 100e18, sig);
+    }
+
+    // ------------------------------------------------------- partial-fill rounding (A.3)
+
+    /// @dev A partial fill must round the signed rate *up*, so splitting an order can never let a
+    ///      filler shave a wei off the maker's floor. This pins the boundary to a single wei: the
+    ///      pool pays exactly `actual` for the fill, `mLo` is the largest signed rate that rate
+    ///      can cover, and one wei more (`mHi`) must revert — even though truncating the division
+    ///      the old way would have let `mHi` through.
+    function test_fillOrder_partialFillRoundsTheSignedRateUpwards() public {
+        uint256 amountIn = 100e18;
+        uint256 fillAmt = 40e18;
+
+        // measure the pool's output for this fill on a throwaway order, then rewind so the real
+        // fills below start from the same price and produce the same output.
+        uint256 snap0 = vm.snapshotState();
+        LimitOrders.Order memory probe = _order();
+        probe.nonce = 90;
+        probe.minAmountOut = 0;
+        uint256 actual = _fill(probe, fillAmt, _signOrder(probe, ALICE_PK));
+        vm.revertToState(snap0);
+        assertGt(actual, 0, "probe measured a real output");
+
+        // ceil(minAmountOut * fillAmt / amountIn) <= actual  <=>  minAmountOut*fillAmt <= actual*amountIn
+        uint256 mLo = (actual * amountIn) / fillAmt; // largest rate the pool can cover
+        uint256 mHi = mLo + 1; // one wei more than it can
+        assertLe(mLo * fillAmt, actual * amountIn, "mLo is covered by the pool's output");
+        assertGt(mHi * fillAmt, actual * amountIn, "mHi needs one wei more than the pool pays");
+        // under truncating (floor) division mHi would have been *accepted* — proving the revert
+        // below comes from rounding up, not from the rate being simply out of reach.
+        assertLe((mHi * fillAmt) / amountIn, actual, "floor-rounding would have let mHi through");
+
+        // the covered rate clears, and clears by exactly the rounded-up requirement
+        uint256 snap1 = vm.snapshotState();
+        LimitOrders.Order memory low = _order();
+        low.nonce = 91;
+        low.minAmountOut = mLo;
+        uint256 outLow = _fill(low, fillAmt, _signOrder(low, ALICE_PK));
+        uint256 requiredLow = (mLo * fillAmt + amountIn - 1) / amountIn;
+        assertGe(outLow, requiredLow, "output covered the rounded-up floor");
+        vm.revertToState(snap1);
+
+        // one wei of extra signed rate flips the same fill to a revert, at the exact boundary.
+        // (the signature and key are built *before* expectRevert: they are external calls too,
+        // and Foundry binds the expectation to the next one.)
+        LimitOrders.Order memory hi = _order();
+        hi.nonce = 92;
+        hi.minAmountOut = mHi;
+        bytes memory hiSig = _signOrder(hi, ALICE_PK);
+        PoolKey memory hiKey = _key(hi.tokenIn, hi.tokenOut);
+        // the router is handed the *scaled* floor — the rounded-up rate, one wei above `actual`
+        uint256 requiredHi = (mHi * fillAmt + amountIn - 1) / amountIn;
+        assertEq(requiredHi, actual + 1, "the rounded-up floor is exactly one wei too high");
+        vm.expectRevert(abi.encodeWithSelector(Router.InsufficientOutputAmount.selector, int256(actual), requiredHi));
+        orders.fillOrder(hi, hiKey, fillAmt, hiSig);
+        assertEq(orders.filled(alice, 92), 0, "a rejected fill records nothing");
     }
 
     function test_fillOrder_nativeInputNotSupported_reverts() public {

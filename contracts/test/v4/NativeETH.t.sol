@@ -73,7 +73,7 @@ contract NativeRouter is IUnlockCallback {
     }
 
     function _settleOrTake(currency c) private {
-        int256 delta = pm.getCurrencyDelta(c);
+        int256 delta = pm.getCurrencyDelta(address(this), c);
         if (delta < 0) {
             if (isNative(c)) {
                 // native settle: send exactly the owed amount as msg.value
@@ -240,9 +240,9 @@ contract TakeToCallback is IUnlockCallback {
             SwapParams({zeroForOne: false, amountSpecified: 1e18, sqrtPriceLimitX96: TickMath.MAX_SQRT_RATIO - 1})
         );
         // take the positive native delta to the recipient; settle the tokenB we owe
-        int256 nativeDelta = pm.getCurrencyDelta(key.currency0);
+        int256 nativeDelta = pm.getCurrencyDelta(address(this), key.currency0);
         if (nativeDelta > 0) pm.take(key.currency0, recipient, uint256(nativeDelta));
-        int256 bDelta = pm.getCurrencyDelta(key.currency1);
+        int256 bDelta = pm.getCurrencyDelta(address(this), key.currency1);
         if (bDelta < 0) pm.settle(key.currency1);
         return "";
     }

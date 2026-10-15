@@ -86,7 +86,7 @@ contract ClaimsRouter is IUnlockCallback {
             } else {
                 pm.settle(inCur);
             }
-            uint256 outAmt = uint256(pm.getCurrencyDelta(outCur));
+            uint256 outAmt = uint256(pm.getCurrencyDelta(address(this), outCur));
             if (_takeViaClaim) {
                 pm.takeViaClaim(outCur, address(this), outAmt);
             } else {
@@ -97,7 +97,7 @@ contract ClaimsRouter is IUnlockCallback {
     }
 
     function _net(currency c) private {
-        int256 delta = pm.getCurrencyDelta(c);
+        int256 delta = pm.getCurrencyDelta(address(this), c);
         if (delta < 0) pm.settle(c);
         else if (delta > 0) pm.take(c, address(this), uint256(delta));
     }

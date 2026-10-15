@@ -4,49 +4,46 @@ on:
     tags:
       - 'v*'
 name: Build and Release
+
+# H (supply chain): the same policy as ci.yml — every action is pinned to a full commit SHA
+# with the human-readable tag in a comment. A moving tag (@master, @v1) can be re-pointed by a
+# compromised or careless upstream; a SHA cannot. The release itself is published with the `gh`
+# CLI that ships on GitHub-hosted runners, so the archived actions/create-release and
+# actions/upload-release-asset are no longer needed at all.
+permissions:
+  contents: write
+
 jobs:
   build:
-    name: Global Job
-    strategy:
-      matrix:
-        node: ['10.x']
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    name: Build and publish
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
     steps:
-      - name: Checkout code
-        uses: actions/checkout@master
-      - name: Create production build
-        uses: actions/setup-node@master
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: ${{ matrix.node }}
-      - run: npm install -g yarn
-      - run: yarn
-      - run: yarn build
+          # the manifest records the commit it was built from; a shallow clone can't be verified
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      # npm, not yarn: this repo has no root lockfile and apps/web ships package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      # next build emits .next/ (next.config.mjs sets no distDir) — the old workflow zipped a
+      # ./build directory that has never existed in this app
+      - run: npm run build
+      # F.2: the signed deployment manifest must verify against the checkout being released
+      - run: node scripts/verify-manifest.mjs 31337
+      - name: Package the build
+        working-directory: ${{ github.workspace }}
+        run: zip -r build.zip apps/web/.next
+      - name: Create the release
+        working-directory: ${{ github.workspace }}
         env:
-          REACT_APP_NETWORK_ID: ${{ secrets.REACT_APP_NETWORK_ID }}
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
-      - name: Zip the build
-        uses: thedoctor0/zip-release@master
-        with:
-          filename: 'build.zip'
-          path: './build'
-          exclusions: 'x'
-      - name: Upload Build
-        id: build-asset
-        uses: actions/upload-release-asset@v1.0.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: build.zip
-          asset_name: build.zip
-          asset_content_type: application/zip
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "Release $GITHUB_REF_NAME" --generate-notes build.zip

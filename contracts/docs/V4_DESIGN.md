@@ -8,7 +8,7 @@ if you want something else before publishing).
 
 ## Goals
 1. One `PoolManager` holds every pool, so multi-hop swaps move no tokens between pools.
-2. Flash accounting: inside one `unlock` session, balance changes accumulate as per-currency deltas;
+2. Flash accounting: inside one `unlock` session, balance changes accumulate as per-account, per-currency deltas (D37);
    tokens move only when the session ends and all deltas must be zero.
 3. Hooks: external contracts that run at defined points of a pool's life.
 4. Native ETH as a first-class currency.

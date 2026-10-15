@@ -7,19 +7,20 @@ import MerkleDistributorAbi from './abi/MerkleDistributor.json'
 
 // ---- V4 core (Swapex singleton + periphery). Defaults are the deterministic anvil addresses
 // produced by `contracts/script/Deploy.s.sol`; override via env for any other deployment.
-// NOTE: Deploy.s.sol deploys AllowanceTransfer between PoolManager and Router, so every address
-// after PoolManager shifts whenever the script is re-run on a chain with existing nonces.
+// NOTE: Deploy.s.sol first deploys the linked SwapLogic library (nonce 0), so every address shifts
+// by one relative to a library-free deployment, and again whenever the script is re-run on a chain
+// with existing nonces. Override via NEXT_PUBLIC_* for any other deployment.
 export const POOL_MANAGER_ADDRESS =
-  process.env.NEXT_PUBLIC_POOL_MANAGER || '0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512'
+  process.env.NEXT_PUBLIC_POOL_MANAGER || '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0'
 export const ALLOWANCE_TRANSFER_ADDRESS =
-  process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0'
+  process.env.NEXT_PUBLIC_ALLOWANCE_TRANSFER || '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9'
 export const ROUTER_ADDRESS =
-  process.env.NEXT_PUBLIC_ROUTER || '0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9'
+  process.env.NEXT_PUBLIC_ROUTER || '0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9'
 export const QUOTER_ADDRESS =
-  process.env.NEXT_PUBLIC_QUOTER || '0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9'
+  process.env.NEXT_PUBLIC_QUOTER || '0x5FC8d32690cc91D4c39d9d3abcBD16989F875707'
 // C: the allowlist distributor (fixture root, timelock-owned root rotation)
 export const MERKLE_DISTRIBUTOR_ADDRESS =
-  process.env.NEXT_PUBLIC_MERKLE_DISTRIBUTOR || '0xc5a5C42992dECbae36851359345FE25997F5C42d'
+  process.env.NEXT_PUBLIC_MERKLE_DISTRIBUTOR || '0x67d269191c92Caf3cD7723F116c85e6E9bf55933'
 
 export const POOL_MANAGER_ABI = PoolManagerAbi
 export const ROUTER_ABI = RouterAbi
@@ -60,21 +61,21 @@ export const TOKEN_LIST = [
   {
     symbol: 'SWA',
     name: 'Swapex A',
-    address: process.env.NEXT_PUBLIC_SWA || '0x0165878A594ca255338adfa4d48449f69242Eb8F',
+    address: process.env.NEXT_PUBLIC_SWA || '0xa513E6E4b8f2a923D98304ec87F64353C4D5C853',
     decimals: 18,
     logo: '/tokens/token-logo.c253d7c5.png',
   },
   {
     symbol: 'SWB',
     name: 'Swapex B',
-    address: process.env.NEXT_PUBLIC_SWB || '0xa513E6E4b8f2a923D98304ec87F64353C4D5C853',
+    address: process.env.NEXT_PUBLIC_SWB || '0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6',
     decimals: 18,
     logo: '/tokens/token-logo.c253d7c5.png',
   },
   {
     symbol: 'SWC',
     name: 'Swapex C',
-    address: process.env.NEXT_PUBLIC_SWC || '0x2279B7A0a67DB372996a5FaB50D91eAA73d2eBe6',
+    address: process.env.NEXT_PUBLIC_SWC || '0x8A791620dd6260079BF849Dc5567aDC3F2FdC318',
     decimals: 18,
     logo: '/tokens/token-logo.c253d7c5.png',
   },

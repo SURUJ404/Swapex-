@@ -60,7 +60,8 @@ benign classes already triaged above:
 
 The V4-specific reentrancy surface (the `unlock` callback) is **by design**: nested `unlock`
 reverts `AlreadyUnlocked`, and the end-of-session net-zero sweep (`UnsettledDelta`) guarantees
-no currency delta can be left non-zero, so a callback cannot extract value it did not settle.
+no account delta can be left non-zero, and deltas are kept per account (D37), so a callback can neither
+extract value it did not settle nor move the session locker's funds (`test/v4/HookIsolation.t.sol`).
 This is exercised by `test_unsettledDelta_reverts` and `test_nestedUnlock_reverts`
 (`test/v4/PoolManager.t.sol`). Settlement uses `transferFrom`/`transfer` return values (revert
 `TransferFailed` on `false`), matching the V3 `_safeTransfer` posture.
@@ -328,7 +329,7 @@ adjudicated in Phase 5. The one genuine finding (**H-2**) is fixed.
 | L-12 address set without checks (4) | `Router:78/118/139/158` (`_recipient = recipient`) | same ruling as Slither `missing-zero-check` (accepted in Phase 4) |
 | L-13 state var could be immutable (1) | `PoolManager` owner (was `PoolManager:116`) | **Superseded by F.1 (D29).** The owner is now OpenZeppelin `Ownable`'s private `_owner`, intentionally mutable via the two-step transfer to the timelock/multisig — immutability would defeat the whole point |
 | L-14 unchecked return (5) | `Router:84/124/147/162` (`pm.unlock`), `:281` (`pm.settle`) | same as Slither `unused-return`: `settle` reverts on failure and its return equals `-getCurrencyDelta`, which every caller already checks |
-| L-15 unsafe ERC20 operation (9) | `SwapexPool:546`, `PoolManager:278/279/680/708`, `Router:280`, `Currency.sol:52/60/67` | transfers are balance-delta-checked (Manual review notes); `Router:280`'s approve is consumed exactly by the following `settle` (allowance returns to 0 — USDT-style zero-reset safe) |
+| L-15 unsafe ERC20 operation (9) | `SwapexPool:546`, `PoolManager:278/279/680/708`, `Router:280`, `Currency.sol:52/60/67` | ERC-20 `settle`/`mint` are balance-delta-checked since D38 (earlier revisions only trusted the token's return value); `Router:280`'s approve is consumed exactly by the following `settle` (allowance returns to 0 — USDT-style zero-reset safe) |
 | L-16 unspecific pragma (16) | `^0.8.26` across `src/` | `solc_version = "0.8.26"` is pinned in `foundry.toml`; caret is the repo convention |
 | L-17 unused error (2) | `SqrtPriceMath:13/15` | dead declarations in the V3-faithful port; unreferenced errors emit no bytecode |
 | L-18 public fn not used internally (2) | `AllowanceTransfer:191/198` | `isNonceUsed` is called cross-contract by `Router.exactInputSingleWithPermit`; `hashPermitSingle` is the off-chain EIP-712 digest helper for frontends/tests — both are external API by design |
@@ -349,3 +350,79 @@ not a substitute for the manual review notes below.
 - **No TWAP oracle yet.** Added in Phase 1 step 7.
 - **`getTickAtSqrtRatio` is a binary search** (correct, ~30k gas). Replaced with a log2 version in
   Phase 1 step 6, with the original retained as a test oracle.
+
+## Hardening pass 2 — manual review (D41, D42, CI scale, ownership rehearsal)
+
+No static-analysis re-run in this pass: the four changes below were reviewed by hand and are pinned
+by new tests. Slither/Aderyn were not re-run (no toolchain here) — see "Still open" in `CHANGES.md`.
+
+- **Per-user fee ledger (D41, supersedes D26).** The manager keys a position by whoever calls
+  `modifyLiquidity`, so every LP merges into one slot per (pool, range). Settlement used to net that
+  slot's whole `feesAccrued` against the *caller's* principal, so the first LP to touch the slot
+  collected every other LP's fees and under-paid their own principal. The Router now moves the
+  caller's **full** principal each time, books the slot's realised fees to `feeReserve[currency]`,
+  and pays each LP only the share their own `feeGrowthInside` checkpoint earned.
+  The invariant is `balanceOf(router, c) >= feeReserve[c]` after every operation — asserted by
+  `_assertReserveBacked` in every case and fuzzed by
+  `testFuzz_reserveIsNeverOverdrawnByASecondLp`. Fees only become the Router's to hand out once the
+  shared slot is touched, so `collectFees` is a zero-liquidity poke that realises them first rather
+  than a bare ledger read. A native-currency position is covered too: `_refundNative` subtracts
+  `_nativeReserve`, so a held reserve is never refunded to the next caller.
+- **`LimitOrders` signs the full pool identity (D42).** `tickSpacing` and `hooks` are now part of the
+  signed `Order` and the EIP-712 version was bumped to `"2"`. Editing either field changes the
+  digest, so it fails the *signature*, not just `fillOrder`'s pool check — covered by
+  `test_fillOrder_editedTickSpacingFailsTheSignatureNotJustThePoolCheck` and the `hooks` twin.
+- **Fuzz at scale in CI.** `foundry.toml` gained a `profile.ci` (1000 fuzz runs, 128 invariant runs ×
+  depth 60 — every axis doubled versus the laptop default of 512/64/30) and `.github/workflows/ci.yml`
+  runs the whole suite on it, plus `--fuzz-runs 5000` for the permit/rounding/fee-ledger/settlement
+  suites. forge 1.x exposes no `--invariant-runs` flag, which is why the scale lives in a profile
+  rather than on the command line.
+- **Timelock / multisig ownership rehearsal (`test/Admin.t.sol`).** The runbook is executed, not
+  described: deployer hands the manager to the timelock through the two-step transfer *with*
+  `acceptOwnership` itself going through schedule -> delay -> execute; the optional admin is
+  renounced and governance provably still works (only the timelock itself remains admin, and a role
+  grant must be queued); proposer and executor are held by different addresses and neither can do the
+  other's job; a 2-of-3 multisig holds all three timelock roles and one signature is not enough.
+  `MockMultisig` exists only so the M-of-N branch is exercised rather than assumed — a real
+  deployment uses an audited Safe.
+
+## Hardening pass 3 — D41 adversarial follow-up (Router only; PoolManager untouched)
+
+Three confirmed findings against the pass-2 fee ledger, each pinned by a test that fails on the
+old code (reproduced before the fix, green after). Solc note: one draft fix (an early `return` in
+`_doModifyLiquidity`) hit a solc 0.8.26 via-ir internal compiler error ("Assembly exception for
+bytecode"); the shipped shape is an `if/else` join, which compiles cleanly.
+
+- **Before-add-liquidity hook growth over-credit (HIGH, latent).** `beforeAddLiquidity` runs
+  *before* the manager updates the shared slot, and may swap or donate (only guard is the unlock
+  locker — `PoolManager.unlock` does not block `swap`/`donate` from inside a hook). The old code
+  checkpointed the joiner's position from a *pre-hook* read while their new delta was already in
+  the ledger: the hook-window growth then accrued at the joiner's new ledger liquidity but was
+  booked by the manager at the *old* slot liquidity — an over-credit of `added delta x
+  hook-window growth`, payable only by draining other LPs' backed fees. No in-repo hook carries
+  add-liquidity flags (latent today, exploitable on third-party pools), so the fix is
+  unconditional: always re-checkpoint from a **post-op** read, the conservative direction in
+  every case (genuine in-op growth is under-credited to the next touch; never over-credited).
+  Pinned by `test_beforeAddHookGrowthIsNeverCreditedToAJoinersDelta` (uses `DonateOnAddHook`,
+  mined `BEFORE_ADD_LIQUIDITY_FLAG = 1 << 9`; asserts every claim stays backed by the reserve).
+  Old-code failure: `tokenA: every claim is backed by the reserve: 3999800019998000198 >
+  1999999999999999998`.
+- **Floor-fragmentation DoS (MEDIUM).** The manager floors each accrual touch
+  (`Position.update`), the ledger floors a whole checkpoint span — so foreign `liquidityDelta ==
+  0` pokes fragment windows: many sub-wei windows floor to zero while the union floor still books
+  wei, wedging a permanent shortfall in that window. Two fixes: (a) an empty-ledger poke (liquidity
+  0, delta 0 — anyone can create one at any position id) never enters the shared slot, so nobody
+  can touch *your* window without being a holder; (b) the flush now **partially releases**:
+  `_releasePartial` pays exactly what `feeReserve` backs and leaves the remainder claimed in
+  `tokensOwed` for later touches, instead of the old `_release` reverting `FeeReserveShortfall` —
+  which, because the flush always pays fees before principal, froze the holder's fees *and* their
+  removal. Pinned by `test_dustWindowPokingCannotStrandFeesOrBlockRemoval` (old-code failure:
+  `FeeReserveShortfall(0x5991A2dF…, 1, 0)`) and `test_emptyLedgerPokeNeverTouchesTheSharedSlot`
+  (old-code failure: outsider poke booked `14999999999999999 != 0`).
+- **Invariants after the fix.** Unchanged and still asserted everywhere: `balanceOf(this, c) >=
+  feeReserve[c]` after every operation (the partial release can only pay what the reserve holds).
+  The weaker ledger-sum bound `sum(tokensOwed) <= feeReserve` may now transiently exceed the
+  reserve by floor rounding alone; the excess stays claimed and is paid on later touches — by
+  construction it can never be paid out unbacked. Verified: 263/263 forge tests (the pass-2
+  baseline of 260 + the 3 tests above), 5000-run fuzz on `PositionFees`, CI-profile invariants
+  (128 x 60) green, Router 11,319 B / 24,576 B.

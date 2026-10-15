@@ -68,7 +68,7 @@ contract HookRouter is IUnlockCallback {
     }
 
     function _settleOrTake(currency c) private {
-        int256 delta = pm.getCurrencyDelta(c);
+        int256 delta = pm.getCurrencyDelta(address(this), c);
         if (delta < 0) {
             pm.settle(c);
         } else if (delta > 0) {

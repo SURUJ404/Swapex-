@@ -111,6 +111,7 @@ mappings (those arrived in 0.8.28), so the accessors are hand-written assembly w
 avoid cross-contract slot collisions.
 
 ## D14 — Flash-accounting safety: net-zero sweep over touched currencies
+> **Superseded by D37** (per-account deltas, non-zero counter instead of a touched-list). The rationale below still holds.
 **Decision:** `unlock` records every currency whose delta becomes non-zero and, before
 releasing the lock, iterates them and reverts `UnsettledDelta` unless each delta is exactly
 zero.
@@ -243,7 +244,7 @@ transaction reverts. It is purely additive (a zero floor reproduces prior behavi
 existing call sites only needed the extra argument.
 
 
-## D26 - Router tracks per-user position liquidity so Remove is attributable
+## D26 - Router tracks per-user position liquidity so Remove is attributable (superseded by D41)
 **Decision:** The Router keeps a `mapping(address => mapping(bytes32 => uint128))` registry of the
 liquidity each wallet contributed to a position slot, updated in `modifyLiquidity` (credited on add,
 debited on remove, reverting `InsufficientPositionLiquidity` on over-removal). Exposed via
@@ -254,6 +255,10 @@ per-user registry a front-end could not know how much liquidity a wallet owns an
 correct removal. Known limitation: trading fees still accrue to the *merged* slot, so the first user
 to remove sweeps the whole slot's accrued fees; a full per-user PositionManager (tracking fees per
 beneficiary) is future work. For the single-provider local demo this is sufficient.
+**Superseded by D41:** that "known limitation" is a theft vector, not a demo shortcut — settlement
+netted the whole slot's `feesAccrued` against whichever caller happened to touch it. The liquidity
+registry was folded into D41's richer per-user `FeePosition` ledger; `getPositionLiquidity` kept its
+ABI and now reads `liquidity` out of that ledger.
 
 ## D27 — Users grant bounded, expiring allowances to the Router through `AllowanceTransfer`, verified with OpenZeppelin's `SignatureChecker`
 **Decision:** New `src/v4/periphery/AllowanceTransfer.sol` (EIP-712 domain "Swapex AllowanceTransfer"
@@ -594,3 +599,110 @@ policy new); `npx playwright test` 2 passed - including the real-UI swap-grant f
 the summary panel appears during the wallet prompt, the signed permit lands bounded
 on-chain, the swap completes, and zero CSP violations occur; live header fetch shows the
 full CSP served; lint 0 errors; build ok.
+
+## D37 - Flash-accounting deltas are per account, not per currency
+**Decision:** `PoolManager` keeps transient deltas keyed by `(account, currency)`, where the account is the
+`msg.sender` that performed the swap / liquidity change / donate / settle / take. `unlock` records the
+caller as locker and reverts `UnsettledDelta` unless a transient counter of non-zero `(account, currency)`
+entries is zero. The old touched-currency array and `_isTouched` flags are gone; `getCurrencyDelta` now
+takes `(account, currency)`.
+**Rationale:** With one delta per currency, any contract that gained control mid-session (a hook, a native
+ETH recipient) shared the locker's ledger. A hook's `afterSwap` could `take` the swapper's output to an
+attacker address and the session still netted to zero; it could equally `donate` and leave the swapper to
+pay. `test_afterSwapHook_cannotTakeSwappersProceeds` reproduced the theft on the old code (996006981039903
+wei of output stolen) and passes after this change. The invariant "hooks cannot extract value" in earlier
+docs was only true for hooks that cooperated.
+**Consequences:** Hook-donation (`beforeSwapDelta`) credits the *caller's* delta explicitly. The Router
+reads its own delta (`getCurrencyDelta(address(this), c)`). Frontend/off-chain readers must pass the account.
+
+## D38 - ERC-20 settlement is balance-checked; fee and spacing bounds are enforced
+**Decision:** `settle` and `mint` measure the manager's token balance before and after `transferFrom` and
+revert `TransferShortfall` if it grew by less than the credited amount. `initialize` rejects
+`tickSpacing` outside `(0, 16384)` and static `fee >= 1_000_000`; a dynamic-fee hook returning
+`>= 1_000_000` reverts `InvalidLpFee`.
+**Rationale:** Trusting a token's return value let a fee-on-transfer token create credit the manager never
+received, breaking `reserves == balance`. An unbounded dynamic fee let a hook make `computeSwapStep`
+misbehave. Both are cheap to check on the hot path.
+
+## D39 - Router multi-hop walks the current currency; swap loop is an external library (EIP-170)
+**Decision:** (a) `Router._doMulti` tracks the currency it currently holds and picks each hop's direction from
+it, replacing the single shared-currency heuristic that was ambiguous when two adjacent pools share *both*
+currencies. A hop whose pool does not contain the held currency reverts `PathCurrenciesDisjoint`; a hop with
+no positive held delta reverts `PathBrokenHop`. (b) The swap loop moved to `SwapLogic`, an `external`
+library the manager delegatecalls, taking `PoolManager` from 27,419 B to 19,398 B runtime (limit 24,576 B).
+`test/v4/CodeSize.t.sol` fails the build if the manager or router exceed EIP-170.
+**Consequences:** Deployments now include a linked library (`forge script` deploys and links it first, which
+shifts every later deployer-nonce address by one; defaults in `apps/web/constants/index.js` were updated).
+The signed deployment manifest (D30) must be regenerated: its code hashes are stale until then.
+
+## D40 - Smaller correctness fixes
+* `AllowanceTransfer.setAllowance` emitted `AllowanceSet(owner, token, spender, ...)` against a declared
+  order of `(owner, spender, token, ...)`, so indexed topics were swapped; fixed with a `vm.expectEmit` test.
+* `LimitOrders` partial fills round the per-fill `minAmountOut` **up**, so a maker can never receive less
+  than their signed rate on any fill (floor rounding let the taker shave 1 wei per fill).
+* The frontend permit-nonce search reads the bitmap a 256-bit word at a time (`apps/web/lib/nonce.js`)
+  instead of probing nonces one by one up to 1024, removing a lockout after 1024 burned nonces (supersedes
+  the "bounded `isNonceUsed` scan" noted in D36).
+
+## D41 - Per-user fee ledger in the Router; the shared slot's fees are booked to a reserve (supersedes D26)
+**Decision:** `PoolManager.getFeeGrowthInside(key, tickLower, tickUpper)` is a public view, and the
+Router replaces D26's liquidity-only registry with a per-`FeePosition` ledger:
+`{uint128 liquidity, uint256 feeGrowthInside0LastX128, feeGrowthInside1LastX128, tokensOwed0, tokensOwed1}`
+keyed by `(beneficiary, positionId)`. `modifyLiquidity` splits the settlement:
+* the caller's **full principal** is pulled (or paid out) unconditionally — `pm.settle` never receives
+  it, so `_settleLiqSide` settles only `principal - fees` when the netting goes the other way;
+* every wei the slot produced since its last touch (`feesAccrued` in `_updatePosition`) is retained by
+  the Router and added to `feeReserve[currency]`;
+* the caller's own share is accrued into their ledger from `getFeeGrowthInside` and paid out in the
+  same transaction.
+
+`modifyLiquidity` returns `(callerDelta, feesAccrued)`; `collectFees(key, tickLower, tickUpper,
+recipient)` pays a beneficiary out; `getUnclaimedFees` is the read-only view. `_refundNative` refunds
+only `balance - _nativeReserve` so a held reserve is never handed to the next caller, and the Router
+gains `receive()` restricted to the manager (the retained principal/fees are delivered by `pm.take`).
+**Rationale:** PoolManager keys a position by whoever calls `modifyLiquidity`, so every LP merges into
+one slot per (pool, range). Netting the slot's whole `feesAccrued` against *the caller's* principal
+meant the first LP to touch the slot collected every other LP's fees (and under-paid their own
+principal) — D26 recorded this as a "known limitation"; it is a theft vector.
+**Consequences / invariant:** because `_updatePosition` nets `feesAccrued` into `_accountDelta` for the
+Router, the Router must hold those fees before it hands out principal, hence the full-principal pull.
+The reserve invariant `balanceOf(router, c) >= feeReserve[c]` holds after every operation (the
+`_assertReserveBacked` helper checks it in each test) and never goes negative across sequential LPs —
+`testFuzz_reserveIsNeverOverdrawnByASecondLp`. The manager's `position.tokensOwed` has no collect path
+and stays purely informational, so netting can never pay a claim twice. Fees only become *this
+contract's* to hand out once the shared slot is touched (that is when the manager books them), so
+`collectFees` is implemented as the same `liquidityDelta == 0` poke as a fee-realising touch rather
+than a bare ledger read. `getPositionLiquidity` keeps its ABI and now reads `liquidity` from the
+ledger. `feeGrowthInside` is monotonic only while the position holds liquidity, so the checkpoint is
+re-read *post*-operation **always**, not only when the position was empty (hardening pass 3): a first
+(or first-after-full-removal) mint rewrites the boundary ticks' `feeGrowthOutside` mid-op, and a
+before/after-liquidity hook may swap or donate mid-op while the joiner's new delta already sits in
+the ledger but not yet in the shared slot — checkpointing the pre-hook value would credit growth the
+joiner's liquidity did not produce (over-credit = added delta x hook-window growth, paid out of other
+LPs' backed fees; pinned by `test_beforeAddHookGrowthIsNeverCreditedToAJoinersDelta`). The post-read
+is the conservative direction in every case: growth genuinely earned inside the op is left to the
+next touch, an under-credit of at most that window, never an unbacked claim. Two further
+hardening-pass-3 rules: (a) an *empty-ledger* `liquidityDelta == 0` poke never enters the shared
+slot (`test_emptyLedgerPokeNeverTouchesTheSharedSlot`) — anybody can insert such pokes, and letting
+the manager floor that window against every other LP's un-floored span wedges wei-sized
+rounding shortfalls into holders' collects; holders still realise fees whenever they themselves
+touch; and (b) the flush releases **partially** — `_releasePartial` pays exactly what `feeReserve`
+backs and leaves the remainder claimed in `tokensOwed`, so a rounding wedge can never freeze a
+holder's fees *and* principal (old behaviour: `_release` reverted `FeeReserveShortfall`, now
+removed; pinned by `test_dustWindowPokingCannotStrandFeesOrBlockRemoval`). The reserve invariant
+`balanceOf(this) >= feeReserve[c]` is unchanged; only the weaker ledger-sum bound can transiently
+exceed the reserve, by floor rounding alone, and the excess is paid on later touches.
+
+## D42 - `LimitOrders` signs the full pool identity, not just `fee`
+**Decision:** The `Order` struct gains `int24 tickSpacing` and `address hooks` (both after `fee`),
+`ORDER_TYPEHASH` and `hashOrder` encode them, and the EIP-712 domain version is bumped `"1"` -> `"2"`.
+`fillOrder` reverts `PoolMismatch` unless `fee`, `tickSpacing` *and* `hooks` all match the pool being
+filled against, in addition to the existing token-pair check.
+**Rationale:** A signature that covered only `(maker, tokenIn, tokenOut, fee, ...)` was valid for every
+pool sharing that fee tier — a different `tickSpacing` means different tick boundaries, different
+rounding and a different price range for the same `sqrtPriceX96`, and a `hooks`-carrying pool can run
+arbitrary pre/post-swap code. Binding the whole key makes the signature mean one specific pool.
+**Consequences:** pre-existing signed orders are invalidated by the version bump (there is no
+cross-version replay, which is the point). `test_fillOrder_editedTickSpacingFailsTheSignatureNotJustThePoolCheck`
+and its `hooks` twin prove the failure is cryptographic, not just the pool check — the digest itself
+changes — and `test_fillOrder_partialFillRoundsTheSignedRateUpwards` pins the rounding side.

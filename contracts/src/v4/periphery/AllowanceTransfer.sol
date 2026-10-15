@@ -120,7 +120,7 @@ contract AllowanceTransfer is EIP712 {
     function setAllowance(address token, address spender, uint160 amount, uint48 expiration) external {
         if (expiration <= block.timestamp) revert AllowanceAlreadyExpired(expiration);
         _writeAllowance(msg.sender, token, spender, amount, expiration);
-        emit AllowanceSet(msg.sender, token, spender, amount, expiration);
+        emit AllowanceSet(msg.sender, spender, token, amount, expiration);
     }
 
     /// @notice burn `nonce` so any already-signed grant using it can never be submitted later

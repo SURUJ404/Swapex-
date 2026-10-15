@@ -62,6 +62,16 @@ jobs:
       - run: find out -name '*.json' | sort | xargs sha256sum > /tmp/build2.sha256
       - run: diff /tmp/build1.sha256 /tmp/build2.sha256 && echo "reproducible - artifacts identical across clean rebuilds"
       - run: forge build --sizes || echo "::warning::PoolManager exceeds EIP-170 by design (deployed locally with anvil --code-size-limit 131072); size gate relaxed to match deployment target"
+      # Item 3 — fuzz at scale. The whole suite runs on the `ci` profile defined in
+      # foundry.toml (1000 fuzz runs, 128 invariant runs x depth 60: every axis doubled versus
+      # the 512/64/30 a laptop uses). forge 1.x exposes no --invariant-runs flag, so the only
+      # way to scale a stateful campaign outside foundry.toml is a profile — the compiler
+      # settings are inherited unchanged, so the reproducibility check above still applies.
       - run: forge test -vv
-      # signature / permit code is fuzzed far harder than the rest of the suite (>= 5000 runs).
-      - run: forge test --match-contract AllowanceTransferTest --fuzz-runs 5000
+        env:
+          FOUNDRY_PROFILE: ci
+      # and the suites that hold the exploitable off-by-ones — permit signatures, partial-fill
+      # rounding, the per-user fee ledger, flash-accounting settlement — get >= 5000 runs on top.
+      - run: forge test --match-contract 'AllowanceTransferTest|LimitOrdersTest|PositionFeesTest|SettleAccountingTest|FuzzTest' --fuzz-runs 5000
+        env:
+          FOUNDRY_PROFILE: ci

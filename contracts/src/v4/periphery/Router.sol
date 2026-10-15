@@ -3,9 +3,10 @@ pragma solidity ^0.8.26;
 
 import {PoolManager, IUnlockCallback, SwapParams, ModifyLiquidityParams} from "../PoolManager.sol";
 import {currency, isNative} from "../types/Currency.sol";
-import {BalanceDelta, amount0, amount1} from "../types/BalanceDelta.sol";
+import {BalanceDelta, amount0, amount1, toBalanceDelta} from "../types/BalanceDelta.sol";
 import {PoolKey} from "../types/PoolKey.sol";
 import {TickMath} from "../../libraries/TickMath.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {AllowanceTransfer} from "./AllowanceTransfer.sol";
 
 /// @notice User-facing periphery: the single contract that opens `unlock` sessions and settles /
@@ -57,6 +58,7 @@ contract Router is IUnlockCallback {
 
     error PathTooShort();
     error PathCurrenciesDisjoint();
+    error PathBrokenHop();
     error InsufficientOutputAmount(int256 amountOut, uint256 minAmountOut);
     error TransactionTooOld(uint256 deadline, uint256 blockTimestamp);
     error AmountBelowMin(uint8 currencyIndex, uint256 amount, uint256 minAmount);
@@ -64,18 +66,54 @@ contract Router is IUnlockCallback {
     error InsufficientPositionLiquidity(uint128 requested, uint128 available);
     error InvalidPermitSpender(address expected, address actual);
     error NativeRefundFailed();
+    error NativeInputShortfall(uint256 required, uint256 available);
+    error ZeroRecipient();
+
+    uint256 private constant FEE_GROWTH_SCALE = 1 << 128;
 
     // ---------------------------------------------------------------- position registry
     // The manager keys positions by the *caller* of `modifyLiquidity` (this router), so every
     // user's liquidity merges into one on-chain slot per (pool, range). This registry tracks each
-    // beneficiary's share so `removeLiquidity` can be attributed and over-removal rejected. Fees
-    // still accrue to the merged slot (see DECISIONS.md D26 — a full per-user position manager is
-    // future work; for the single-provider demo frontend this is sufficient).
-    mapping(address => mapping(bytes32 => uint128)) private _positionLiquidity;
+    // beneficiary's share of that slot: their liquidity, their own fee-growth checkpoint, and the
+    // fees credited to them but not yet paid out. Settlement is split so the caller always pays
+    // (or receives) the *whole* principal while every fee the merged slot accrues is booked to
+    // this contract's reserve — see DECISIONS.md D41.
+    struct FeePosition {
+        uint128 liquidity;
+        uint256 feeGrowthInside0LastX128;
+        uint256 feeGrowthInside1LastX128;
+        uint256 tokensOwed0;
+        uint256 tokensOwed1;
+    }
+
+    mapping(address => mapping(bytes32 => FeePosition)) private _feePositions;
+    /// @notice fees this contract holds on behalf of LPs, per currency (native is address(0)).
+    ///         Always backed by the matching real balance — `collectFees` / a liquidity change
+    ///         release at most what the reserve holds, so `balanceOf(this) >= feeReserve[c]`
+    ///         after every operation. The sum of unpaid ledger claims can transiently exceed
+    ///         the reserve by floor-rounding only (the manager floors each touch, a claim floors
+    ///         its whole checkpoint span); such an excess stays claimed in the ledger and is
+    ///         paid as soon as later touches book enough — never by dipping below the reserve.
+    mapping(address => uint256) public feeReserve;
+    /// @dev native half of `feeReserve`, kept separately so `_refundNative` returns only the
+    ///      payer's surplus and never the ETH held for LPs.
+    uint256 private _nativeReserve;
+
+    // filled by `_settleLiquidity` inside the session, released once it has closed
+    uint256 private _pendingOut0;
+    uint256 private _pendingOut1;
 
     constructor(PoolManager _pm, AllowanceTransfer _at) {
         pm = _pm;
         at = _at;
+    }
+
+    /// @dev the router has to *hold* native currency now: a removal's principal is taken back from
+    ///      the manager before it is forwarded to the recipient, and the native half of the fee
+    ///      reserve sits here between accrual and `collectFees`. Only the manager may deliver it —
+    ///      a stray donation must never become somebody else's refund.
+    receive() external payable {
+        require(msg.sender == address(pm), "only manager");
     }
 
     /// @notice initialize a pool (thin passthrough so tests/front-ends can use the router alone).
@@ -185,9 +223,15 @@ contract Router is IUnlockCallback {
     /// @notice add or remove liquidity in one pool (sign of `mp.liquidityDelta` selects).
     ///         `bounds` caps what this call may pay (add, negative deltas) or must receive (remove,
     ///         positive deltas) per currency, and `deadline` caps execution time — the same
-    ///         sandwich/stale-tx protections swaps get (B.1). Fees accrued to the position are
-    ///         returned separately and are not bounded: they are already the caller's balance and
-    ///         cannot be moved by a third party.
+    ///         sandwich/stale-tx protections swaps get (B.1).
+    ///
+    ///         Settlement is split so this call is always *principal-only* from the caller's point
+    ///         of view: they pay (or receive) their whole `callerDelta`, never a fee-netted
+    ///         version of it. The fees the merged on-chain slot accrued in the meantime are booked
+    ///         to this contract's reserve and the caller's own share of them — computed from their
+    ///         private fee-growth checkpoint — is paid out to `recipient` in the same transaction.
+    ///         `feesAccrued` reports exactly that share (not the slot's total), so it is never
+    ///         bounded by `bounds`: it is already the caller's balance.
     function modifyLiquidity(
         PoolKey memory key,
         ModifyLiquidityParams memory mp,
@@ -203,9 +247,36 @@ contract Router is IUnlockCallback {
         _liqBounds = bounds;
         _op = OP_LIQ;
         pm.unlock("");
+        // snapshot before any outbound transfer: a receiver that re-enters re-runs the whole entry
+        // point and would overwrite the session slots we must still return from.
+        callerDelta = _liqCallerDelta;
+        feesAccrued = _flushLiquidityOutflows();
         _refundNative();
-        _recordPosition(msg.sender, key, mp);
-        return (_liqCallerDelta, _liqFees);
+    }
+
+    /// @notice accrue and pay out the caller's share of this range's swap fees to `recipient`,
+    ///         without changing any liquidity. An LP who never adds or removes still has to be able
+    ///         to collect, so this is the same operation as a `liquidityDelta == 0` poke: it first
+    ///         makes the manager realise the shared slot's fees (they only become this contract's
+    ///         to hand out once the slot is touched — until then they are still the manager's
+    ///         reserves), books them to `feeReserve`, then pays out the caller's own share.
+    /// @return amount0Out the amount of `key.currency0` paid out (0 when nothing was owed).
+    /// @return amount1Out the amount of `key.currency1` paid out.
+    function collectFees(PoolKey memory key, int24 tickLower, int24 tickUpper, address recipient)
+        external
+        returns (uint256 amount0Out, uint256 amount1Out)
+    {
+        _payer = msg.sender;
+        _recipient = recipient;
+        _liqKey = key;
+        _liqParams = ModifyLiquidityParams({tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: 0});
+        // a poke moves no principal, so there is nothing to bound
+        _liqBounds = LiquidityBounds({amount0Min: 0, amount1Min: 0, amount0Max: type(uint256).max, amount1Max: type(uint256).max});
+        _op = OP_LIQ;
+        pm.unlock("");
+        BalanceDelta paid = _flushLiquidityOutflows();
+        amount0Out = uint256(amount0(paid));
+        amount1Out = uint256(amount1(paid));
     }
 
     /// @notice the liquidity `user` contributed to the given position slot (0 if none). Lets a
@@ -215,27 +286,57 @@ contract Router is IUnlockCallback {
         view
         returns (uint128)
     {
-        return _positionLiquidity[user][_positionId(key, tickLower, tickUpper)];
+        return _feePositions[user][_positionId(key, tickLower, tickUpper)].liquidity;
+    }
+
+    /// @notice the caller's accrued-but-unpaid fees for a range, before `collectFees` realises
+    ///         them. Both components are in the pool's own currencies.
+    function getUnclaimedFees(address user, PoolKey memory key, int24 tickLower, int24 tickUpper)
+        external
+        view
+        returns (uint256 unclaimed0, uint256 unclaimed1)
+    {
+        FeePosition storage p = _feePositions[user][_positionId(key, tickLower, tickUpper)];
+        (uint256 in0, uint256 in1) = pm.getFeeGrowthInside(key, tickLower, tickUpper);
+        if (p.liquidity != 0) {
+            unclaimed0 = p.tokensOwed0
+                + Math.mulDiv(uint256(p.liquidity), in0 - p.feeGrowthInside0LastX128, FEE_GROWTH_SCALE);
+            unclaimed1 = p.tokensOwed1
+                + Math.mulDiv(uint256(p.liquidity), in1 - p.feeGrowthInside1LastX128, FEE_GROWTH_SCALE);
+        } else {
+            unclaimed0 = p.tokensOwed0;
+            unclaimed1 = p.tokensOwed1;
+        }
     }
 
     function _positionId(PoolKey memory key, int24 tickLower, int24 tickUpper) private pure returns (bytes32) {
         return keccak256(abi.encode(key.toPoolId(), tickLower, tickUpper));
     }
 
+    /// @dev credit `p` with the fees its own liquidity earned since its last checkpoint. The
+    ///      subtraction is checked on purpose: `feeGrowthInside` only stands still or moves
+    ///      forward while the position holds liquidity (its boundary ticks stay initialised, so
+    ///      their `feeGrowthOutside` cannot be rewritten underneath it), so an underflow here can
+    ///      only mean a broken checkpoint — reverting beats minting an unbacked credit.
+    function _accrue(FeePosition storage p, uint256 in0, uint256 in1) private {
+        if (p.liquidity == 0) return;
+        p.tokensOwed0 += Math.mulDiv(uint256(p.liquidity), in0 - p.feeGrowthInside0LastX128, FEE_GROWTH_SCALE);
+        p.tokensOwed1 += Math.mulDiv(uint256(p.liquidity), in1 - p.feeGrowthInside1LastX128, FEE_GROWTH_SCALE);
+    }
+
     /// @dev attribute a liquidity delta to the beneficiary (the router's caller). A removal larger
     ///      than what the caller previously added reverts, so one wallet can't spend another's.
-    function _recordPosition(address user, PoolKey memory key, ModifyLiquidityParams memory mp) private {
-        if (mp.liquidityDelta == 0) return;
-        bytes32 id = _positionId(key, mp.tickLower, mp.tickUpper);
-        if (mp.liquidityDelta > 0) {
-            _positionLiquidity[user][id] += uint128(uint256(mp.liquidityDelta));
+    function _applyLiquidityDelta(FeePosition storage p, int256 delta) private {
+        if (delta == 0) return;
+        if (delta > 0) {
+            p.liquidity += uint128(uint256(delta));
         } else {
-            uint128 amount = uint128(uint256(-mp.liquidityDelta));
-            uint128 current = _positionLiquidity[user][id];
+            uint128 amount = uint128(uint256(-delta));
+            uint128 current = p.liquidity;
             if (current < amount) revert InsufficientPositionLiquidity(amount, current);
             unchecked {
                 // safe: guarded by the `current < amount` check above
-                _positionLiquidity[user][id] = current - amount;
+                p.liquidity = current - amount;
             }
         }
     }
@@ -251,23 +352,189 @@ contract Router is IUnlockCallback {
             _swapDelta = _doMulti();
             _enforceMinOut(_swapDelta, _minOut);
             uint256 n = _pathKeys.length;
-            PoolKey memory first = _pathKeys[0];
-            PoolKey memory last = _pathKeys[n - 1];
-            _settleOrTake(first.currency0);
-            _settleOrTake(first.currency1);
-            _settleOrTake(last.currency0);
-            _settleOrTake(last.currency1);
+            for (uint256 i = 0; i < n; i++) {
+                PoolKey memory pk = _pathKeys[i];
+                _settleOrTake(pk.currency0);
+                _settleOrTake(pk.currency1);
+            }
         } else {
-            (_liqCallerDelta, _liqFees) = pm.modifyLiquidity(_liqKey, _liqParams);
-            _enforceBounds(_liqCallerDelta, _liqBounds);
-            _settleOrTake(_liqKey.currency0);
-            _settleOrTake(_liqKey.currency1);
+            _doModifyLiquidity();
         }
         return "";
     }
 
+    /// @dev the whole liquidity operation, in order:
+    ///      1. credit the caller with their share of the range's fees up to the pre-call state,
+    ///      2. apply their liquidity delta to their ledger (over-removal reverts here, CEI),
+    ///      3. run the manager's op, which merges them into the shared slot,
+    ///      4. re-checkpoint the caller from a *post*-call fee-growth read,
+    ///      5. enforce the caller's bounds, then settle: the caller moves the full principal and
+    ///         the slot's total fees are booked to this contract's reserve.
+    ///
+    ///      Step 4 always re-reads after the op, for two reasons. A first (or
+    ///      first-after-full-removal) mint initialises the boundary ticks and rewrites their
+    ///      `feeGrowthOutside`, jumping `feeGrowthInside` underneath us; and a before/after
+    ///      liquidity hook may swap or donate mid-op, advancing `feeGrowthInside` while the
+    ///      caller's new delta already sits in the ledger but is not yet in the shared slot.
+    ///      Checkpointing a pre-hook value would credit the joiner growth their liquidity did
+    ///      not produce — the manager booked that window at the *old* slot liquidity, so the
+    ///      extra claim could only be paid by draining other LPs' backed fees. The post-read is
+    ///      the conservative direction in every case: growth the caller genuinely earned inside
+    ///      the op (their delta in the slot during an after-hook) is left to the next touch —
+    ///      an under-credit of at most that window, never an unbacked claim.
+    function _doModifyLiquidity() private {
+        PoolKey memory key = _liqKey;
+        ModifyLiquidityParams memory mp = _liqParams;
+        FeePosition storage p = _feePositions[_payer][_positionId(key, mp.tickLower, mp.tickUpper)];
+
+        if (p.liquidity != 0) {
+            (uint256 in0, uint256 in1) = pm.getFeeGrowthInside(key, mp.tickLower, mp.tickUpper);
+            _accrue(p, in0, in1);
+        }
+
+        _applyLiquidityDelta(p, mp.liquidityDelta);
+
+        // An empty-ledger poke has nothing to realise for its caller, so don't touch the shared
+        // slot at all: the manager would floor this window's accrual against every other LP's
+        // un-floored span, and anybody can insert foreign pokes to wedge a wei-sized shortfall
+        // into a holder's collect (and, through the flush, into their removal too). Holders
+        // still realise fees whenever they themselves touch.
+        if (p.liquidity == 0 && mp.liquidityDelta == 0) {
+            _liqCallerDelta = toBalanceDelta(0, 0);
+            _liqFees = toBalanceDelta(0, 0);
+            _pendingOut0 = 0;
+            _pendingOut1 = 0;
+        } else {
+            (_liqCallerDelta, _liqFees) = pm.modifyLiquidity(key, mp);
+
+            (uint256 out0, uint256 out1) = pm.getFeeGrowthInside(key, mp.tickLower, mp.tickUpper);
+            p.feeGrowthInside0LastX128 = out0;
+            p.feeGrowthInside1LastX128 = out1;
+
+            _enforceBounds(_liqCallerDelta, _liqBounds);
+            _settleLiquidity();
+        }
+    }
+
+    /// @dev settle both sides of the liquidity op with the split the caller is owed: they move the
+    ///      whole principal, the manager only ever sees `principal - fees`, and whatever the
+    ///      manager does not collect stays here as fee reserve. Returns nothing — the principal
+    ///      owed *back* to the recipient is stashed in `_pendingOutN` and released after the
+    ///      session closes, so no receiver can re-enter a half-finished unlock.
+    function _settleLiquidity() private {
+        _pendingOut0 = _settleLiqSide(_liqKey.currency0, amount0(_liqCallerDelta), amount0(_liqFees));
+        _pendingOut1 = _settleLiqSide(_liqKey.currency1, amount1(_liqCallerDelta), amount1(_liqFees));
+    }
+
+    /// @dev one currency's half. `callerDelta` is the caller-owes component (positive = the caller
+    ///      receives it), `fees` is what the shared slot accrued. The manager's open delta for
+    ///      this side is exactly `fees + callerDelta`.
+    /// @return principalToSend amount the caller is owed back, to be paid once the session closes.
+    function _settleLiqSide(currency c, int256 callerDelta, int256 fees) private returns (uint256 principalToSend) {
+        int256 delta = fees + callerDelta;
+
+        if (callerDelta < 0) {
+            // the caller always funds the *full* principal; the manager collects only the part
+            // the slot's accrued fees do not cover, so the difference stays here as reserve.
+            uint256 pay = uint256(-callerDelta);
+            if (isNative(c)) {
+                uint256 held = address(this).balance;
+                uint256 available = held > _nativeReserve ? held - _nativeReserve : 0;
+                if (available < pay) revert NativeInputShortfall(pay, available);
+            } else {
+                at.transferFrom(_payer, address(this), pay, currency.unwrap(c));
+            }
+        }
+
+        if (delta < 0) {
+            uint256 owed = uint256(-delta);
+            if (isNative(c)) {
+                pm.settle{value: owed}(c);
+            } else {
+                c.approve(address(pm), owed);
+                pm.settle(c);
+            }
+        } else if (delta > 0) {
+            pm.take(c, address(this), uint256(delta));
+        }
+
+        if (fees > 0) {
+            uint256 f = uint256(fees);
+            feeReserve[currency.unwrap(c)] += f;
+            if (isNative(c)) _nativeReserve += f;
+        }
+
+        if (callerDelta > 0) principalToSend = uint256(callerDelta);
+    }
+
+    /// @dev release the caller's principal and their realised fee share to `recipient` — the
+    ///      fees only as far as the reserve actually backs them. Runs after `pm.unlock` has
+    ///      closed, so a receiver that re-enters starts a self-contained call and cannot observe
+    ///      a half-settled session; every value it reads is copied to memory or cleared first,
+    ///      so a re-entrant run cannot corrupt what we still owe. Whatever the reserve cannot
+    ///      back right now stays claimed in the ledger (`tokensOwed`) and becomes payable on a
+    ///      later touch.
+    function _flushLiquidityOutflows() private returns (BalanceDelta feesPaid) {
+        PoolKey memory key = _liqKey;
+        address to = _recipient;
+        bytes32 id = _positionId(key, _liqParams.tickLower, _liqParams.tickUpper);
+
+        uint256 principal0 = _pendingOut0;
+        uint256 principal1 = _pendingOut1;
+        _pendingOut0 = 0;
+        _pendingOut1 = 0;
+
+        FeePosition storage p = _feePositions[_payer][id];
+        uint256 fee0 = p.tokensOwed0;
+        uint256 fee1 = p.tokensOwed1;
+        uint256 paid0 = 0;
+        uint256 paid1 = 0;
+        if (fee0 != 0) {
+            paid0 = _releasePartial(key.currency0, fee0);
+            p.tokensOwed0 = fee0 - paid0;
+        }
+        if (fee1 != 0) {
+            paid1 = _releasePartial(key.currency1, fee1);
+            p.tokensOwed1 = fee1 - paid1;
+        }
+        feesPaid = toBalanceDelta(int256(paid0), int256(paid1));
+
+        principal0 += paid0;
+        principal1 += paid1;
+        if (principal0 != 0) _send(key.currency0, to, principal0);
+        if (principal1 != 0) _send(key.currency1, to, principal1);
+    }
+
+    /// @dev draw up to `amt` of fees out of the reserve this contract holds for LPs: pay exactly
+    ///      what the reserve backs and no more — an unbacked credit would be theft from every
+    ///      other LP. Reverting instead (the old `_release`) turned the few wei of
+    ///      union-floor-vs-per-window-floor rounding a foreign touch can wedge in into a
+    ///      permanent freeze of the caller's fees *and* their principal, so the shortfall
+    ///      stays claimed in the ledger until a later touch books enough to cover it.
+    function _releasePartial(currency c, uint256 amt) private returns (uint256 paid) {
+        address a = currency.unwrap(c);
+        uint256 reserved = feeReserve[a];
+        paid = amt > reserved ? reserved : amt;
+        if (paid == 0) return 0;
+        feeReserve[a] = reserved - paid;
+        if (isNative(c)) {
+            unchecked {
+                // safe: `_nativeReserve` and `feeReserve[address(0)]` are always updated together
+                _nativeReserve -= paid;
+            }
+        }
+    }
+
+    function _send(currency c, address to, uint256 amt) private {
+        if (to == address(0)) revert ZeroRecipient();
+        c.transfer(to, amt);
+    }
+
     /// @dev chain the hops: hop 0 is exact-in with the user's amount; each later hop sells exactly
-    ///      the intermediate currency amount the previous hop produced (read from its delta).
+    ///      the amount of the currency the previous hop produced (read from this router's own delta,
+    ///      which no hook or recipient can alter). The direction of every hop is derived by walking
+    ///      the path with the *current* currency, so a path whose adjacent pools share both
+    ///      currencies (e.g. two fee tiers of the same pair) is unambiguous.
     function _doMulti() private returns (BalanceDelta lastDelta) {
         uint256 n = _pathKeys.length;
 
@@ -282,38 +549,34 @@ contract Router is IUnlockCallback {
                 sqrtPriceLimitX96: zfo0 ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1
             })
         );
+        // the currency the path holds after hop 0 is hop 0's output
+        currency cur = zfo0 ? k0.currency1 : k0.currency0;
 
-        // hops 1..n-1: input is the shared currency with the previous pool
+        // hops 1..n-1: the input is the currency held, which must be one side of the next pool
         for (uint256 i = 1; i < n; i++) {
-            PoolKey memory prev = _pathKeys[i - 1];
             PoolKey memory k = _pathKeys[i];
-            currency mid = _sharedCurrency(prev, k);
-            int256 midDelta = pm.getCurrencyDelta(mid);
-            uint256 midAmt = uint256(midDelta > 0 ? midDelta : -midDelta);
-            bool zfo = k.currency0 == mid;
+            bool zfo;
+            if (k.currency0 == cur) zfo = true;
+            else if (k.currency1 == cur) zfo = false;
+            else revert PathCurrenciesDisjoint();
+            int256 held = pm.getCurrencyDelta(address(this), cur);
+            if (held <= 0) revert PathBrokenHop();
             lastDelta = pm.swap(
                 k,
                 SwapParams({
                     zeroForOne: zfo,
-                    amountSpecified: int256(midAmt),
+                    amountSpecified: held,
                     sqrtPriceLimitX96: zfo ? TickMath.MIN_SQRT_RATIO + 1 : TickMath.MAX_SQRT_RATIO - 1
                 })
             );
+            cur = zfo ? k.currency1 : k.currency0;
         }
-    }
-
-    /// @dev the currency present in both adjacent pool keys (the hop intermediate); reverts if the
-    ///      path is invalid (two pools that share no currency).
-    function _sharedCurrency(PoolKey memory a, PoolKey memory b) private pure returns (currency) {
-        if (a.currency0 == b.currency0 || a.currency0 == b.currency1) return a.currency0;
-        if (a.currency1 == b.currency0 || a.currency1 == b.currency1) return a.currency1;
-        revert PathCurrenciesDisjoint();
     }
 
     /// @dev pay a negative delta (pull input from the payer, or send held ETH for native) and
     ///      withdraw a positive delta to the recipient.
     function _settleOrTake(currency c) private {
-        int256 delta = pm.getCurrencyDelta(c);
+        int256 delta = pm.getCurrencyDelta(address(this), c);
         if (delta < 0) {
             uint256 amt = uint256(-delta);
             if (isNative(c)) {
@@ -335,11 +598,14 @@ contract Router is IUnlockCallback {
     ///      exact-input swap that hit its price limit and only partially filled, or simply an
     ///      over-payment (settlement only forwards the owed delta). Without this the leftover
     ///      would be stranded — the router has no owner and no withdrawal path.
+    ///      Fees held for LPs sit in the same balance and are excluded via `_nativeReserve`, so an
+    ///      LP's native fee share is never swept back to whoever happened to call last.
     /// @dev reentrancy note: this runs after `pm.unlock` has closed the session, so a receiver
     ///      that re-enters starts a fresh, self-contained call of its own and can only touch the
     ///      allowance and balance it brought itself.
     function _refundNative() private {
-        uint256 excess = address(this).balance;
+        uint256 held = address(this).balance;
+        uint256 excess = held > _nativeReserve ? held - _nativeReserve : 0;
         if (excess == 0) return;
         (bool ok, ) = payable(msg.sender).call{value: excess}("");
         if (!ok) revert NativeRefundFailed();

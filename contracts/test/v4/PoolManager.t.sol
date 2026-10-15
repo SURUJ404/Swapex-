@@ -71,7 +71,7 @@ contract V4Router is IUnlockCallback {
     }
 
     function _settleOrTake(currency c) private {
-        int256 delta = pm.getCurrencyDelta(c);
+        int256 delta = pm.getCurrencyDelta(address(this), c);
         if (delta < 0) {
             pm.settle(c); // pulls tokens from this router (must hold + have approved)
         } else if (delta > 0) {
@@ -331,7 +331,7 @@ contract MultiHop is IUnlockCallback {
         // hop 2: sell the full intermediate delta on pool BC
         currency mid = zfo1 ? ab.currency1 : ab.currency0;
         bool zfo2 = bc.currency0 == mid;
-        int256 midDelta = pm.getCurrencyDelta(mid);
+        int256 midDelta = pm.getCurrencyDelta(address(this), mid);
         uint256 midAmt = uint256(midDelta > 0 ? midDelta : -midDelta);
         pm.swap(
             bc,
@@ -343,9 +343,9 @@ contract MultiHop is IUnlockCallback {
         );
 
         // settle only the net input and take only the net output; mid must already be zero
-        int256 din = pm.getCurrencyDelta(curIn);
+        int256 din = pm.getCurrencyDelta(address(this), curIn);
         if (din < 0) pm.settle(curIn);
-        int256 dout = pm.getCurrencyDelta(curOut);
+        int256 dout = pm.getCurrencyDelta(address(this), curOut);
         if (dout > 0) pm.take(curOut, address(this), uint256(dout));
         return "";
     }

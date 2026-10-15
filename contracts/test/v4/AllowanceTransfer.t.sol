@@ -154,6 +154,16 @@ contract AllowanceTransferTest is Test {
         (uint160 amount,) = at.allowanceOf(alice, address(token), spender);
         assertEq(uint256(amount), 100e18, "65-byte form accepted");
     }
+    /// @dev regression: the event's indexed args are (owner, spender, token); they were once swapped,
+    ///      which made every indexer filter by spender return token-keyed rows.
+    function test_setAllowance_emitsOwnerSpenderTokenInDeclaredOrder() public {
+        uint48 exp = uint48(block.timestamp + 1 days);
+        vm.expectEmit(true, true, true, true, address(at));
+        emit AllowanceTransfer.AllowanceSet(alice, spender, address(token), 42e18, exp);
+        vm.prank(alice);
+        at.setAllowance(address(token), spender, 42e18, exp);
+    }
+
     function test_setAllowance_grantIsScopedToTheCaller() public {
         vm.prank(alice);
         at.setAllowance(address(token), spender, 42e18, uint48(block.timestamp + 1 days));

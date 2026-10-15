@@ -93,6 +93,10 @@ contract MerkleDistributor is Ownable2Step {
     /// @notice Rotate the allowlist root (timelocked: only the owner, which deployments
     ///         point at the TimelockController, can call this - see the contract-level
     ///         threat model for rotation semantics).
+    /// @dev The claimed bitmap is keyed by leaf `index` and is NOT reset when the root rotates. A new
+    ///      root must therefore use indices that were never claimed under any earlier root (e.g. continue
+    ///      numbering from the previous tree's size); reusing an index whose bit is already set makes that
+    ///      leaf permanently unclaimable (`AlreadyClaimed`) even though it is valid under the new root.
     function setRoot(bytes32 newRoot) external onlyOwner {
         if (newRoot == bytes32(0)) revert ZeroRoot();
         emit RootUpdated(merkleRoot, newRoot);

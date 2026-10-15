@@ -3,9 +3,11 @@
 This document states the core invariants of the V4-style `PoolManager` precisely. It is the
 reference the tests (unit, differential, fuzz, invariant) check against. Notation:
 
-- `Δ[c]` — the transient, per-currency *delta* for currency `c` during an unlock session, in the
-  **caller-owes** convention: `Δ[c] > 0` means the pool owes the caller `Δ[c]` of `c` (take);
-  `Δ[c] < 0` means the caller owes the pool `-Δ[c]` of `c` (settle).
+- `Δ[a][c]` — the transient *delta* of account `a` for currency `c` during an unlock session, in the
+  **caller-owes** convention: `Δ[a][c] > 0` means the pool owes `a` `Δ[a][c]` of `c` (take);
+  `Δ[a][c] < 0` means `a` owes the pool `-Δ[a][c]` of `c` (settle). Deltas are keyed by the
+  account that performed the operation (`msg.sender` at the manager), never pooled per currency:
+  a hook that re-enters the manager has its own `Δ[hook][·]` and cannot touch the locker's.
 - `R[c]` — `reserves[c]`, the manager's tracked holdings of `c` (persistent).
 - `C[c][a]` — `claims[c][a]`, account `a`'s ERC-6909 claim on `c` (persistent).
 - `FG0, FG1` — `feeGrowthGlobal0X128 / feeGrowthGlobal1X128` for a pool (Q128 fixed point).
@@ -14,10 +16,20 @@ reference the tests (unit, differential, fuzz, invariant) check against. Notatio
 ## 1. Flash accounting / delta conservation
 
 `unlock(f)` sets the unlocked flag, runs `f` (via `msg.sender.unlockCallback`), then **reverts
-unless `Δ[c] = 0` for every touched currency** before releasing. Transient storage (EIP-1153) holds
+unless `Δ[a][c] = 0` for every account `a` and currency `c`** before releasing (tracked as a count of
+non-zero entries in transient storage, so the check is O(1)). Transient storage (EIP-1153) holds
 `Δ` and is cleared automatically at transaction end.
 
-**Invariant (net-zero).** At the end of a successful `unlock`, `Δ[c] = 0` for all touched `c`.
+**Invariant (net-zero).** At the end of a successful `unlock`, `Δ[a][c] = 0` for all `a`, `c`.
+
+**Invariant (delta isolation).** An operation performed by `a` changes only `Δ[a][·]`. In particular a
+hook callback can neither `take` what the locker is owed nor `settle` against what the locker owes;
+anything a hook does on its own account must be settled by the hook itself or the session reverts
+`UnsettledDelta`. Tested in `test/v4/HookIsolation.t.sol`.
+
+**Invariant (settle is balance-checked).** `settle`/`mint` of an ERC-20 credit only the amount the
+manager's balance actually grew by; a fee-on-transfer or rebasing short-delivery reverts
+`TransferShortfall` instead of creating an unbacked credit.
 Every state-changing pool operation (`swap`, `modifyLiquidity`, `donate`) accounts its effect on
 `Δ` and is `onlyUnlocked`, so no operation can leave the session unbalanced. Settlement
 (`settle`/`take`, and their claim variants) is what drives `Δ` back to zero.
