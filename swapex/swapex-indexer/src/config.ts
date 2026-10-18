@@ -7,6 +7,7 @@ const schema = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
   REORG_DEPTH: z.coerce.number().int().min(1).max(256).default(12),
+  POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60000).default(2000),
 })
 
 export type Config = Omit<z.infer<typeof schema>, 'CORS_ORIGINS'> & { CORS_ORIGINS: string[] }
