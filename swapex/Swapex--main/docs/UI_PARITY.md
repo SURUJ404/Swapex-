@@ -19,9 +19,9 @@ Swapex stays Next.js. We copy the *experience*, not the code.
 | /swap | /swap | Router quote (single and multi-hop), permit signing, slippage bps, price impact |
 | /limit | /limit | Signed limit orders contract (crypto prompt item A.3) + order indexer |
 | /send | /send | ERC-20 transfer, ENS resolve |
-| /explore/tokens, /explore/pools | /explore | Indexer: volume, TVL, price change, sparkline per token and pool |
-| /explore/tokens/:chain/:addr | /explore/tokens/:chain/:addr | Indexer: price chart, pools list, transactions |
-| /explore/pools/:chain/:addr | /explore/pools/:chain/:addr | Pool state (slot0, liquidity), liquidity chart by tick, fee tier, recent swaps |
+| /explore/tokens, /explore/pools | /explore | Indexer: volume, TVL, price change, sortable/searchable tables (no per-row sparkline — N+1 candle fetches; the chart lives on the detail page) |
+| /explore/tokens/:chain/:addr | /explore/tokens/:addr | Indexer: price, pools list, deep links to swap/add |
+| /explore/pools/:chain/:addr | /explore/pools/:addr | Indexer: stats (price, TVL, 24h volume), hand-rolled SVG price chart (1D/1W/1M from candles), recent swaps |
 | /positions, /positions/:id | /positions | NonfungiblePositionManager-style periphery (not written yet) + position reads |
 | /add, /increase, /remove | /positions/new etc. | Range picker (ticks), fee tier select, V3 mint/increase/decrease/collect |
 | /portfolio | /portfolio | Balances, positions, activity from wallet + indexer |
@@ -43,7 +43,7 @@ Swapex stays Next.js. We copy the *experience*, not the code.
   bottom bar, search (token/pool/address), footer.
 - W3 Swap page: token inputs with balance and max, flip, token select modal with search
   and import warning, route/price details accordion, confirm modal, pending/success states.
-- W4 Explore: tokens and pools tables (sort, search, chain filter), detail pages with charts.
+- W4 Explore (done): tokens and pools tables (sort, search), detail pages with hand-rolled SVG price charts.
 - W5 Positions (done): list, range picker with liquidity histogram, create/increase/remove/collect.
 - W6 Portfolio and activity.
 - W7 Limit and send.
@@ -59,12 +59,19 @@ Swapex stays Next.js. We copy the *experience*, not the code.
   /add (pair, fee tier, price range or full range, starting price for a new pool, deposits that follow the
   range, approvals, native ETH, one-transaction pool creation + mint), /pool/<id> (value, collect, add,
   remove with optional receive-ETH, close). Range math is tested and matches the contract to about 1e-10.
-- Next: Explore (needs the indexer), limit orders, viem + wagmi migration, a swap confirmation modal.
+- Done: Explore against the local indexer: /explore (tokens + pools, sort, search), /explore/tokens/<addr>,
+  /explore/pools/<addr> (stats, 1D/1W/1M SVG price chart from indexer candles, recent swaps). Honest
+  empty/error/not-connected states everywhere; no fake numbers.
+- Next: limit orders, viem + wagmi migration, a swap confirmation modal.
 - Removed: the old V2 add/remove/create/pool forms. /remove and /create redirect to /pool and /add.
 
 ## Honest status
-- Contracts: compiled and tested here with Foundry (80 tests pass) and exercised end to end on a local anvil node.
-- Web app: `npm ci`, `npm test` (25 pass), `npm run lint` (0 errors) and `npm run build` all pass on Node 24.
-  Wallet connection is verified by code inspection and the build; a live browser + wallet run still needs a
-  manual check against the local anvil stack (`dev.sh`).
+- Contracts: compiled and tested here with Foundry (80+ tests pass) and exercised end to end on a local anvil node.
+- Web app: `npm ci`, `npm test` (104 pass), `npm run lint` (0 errors, pre-existing `<img>` warnings only) and
+  `npm run build` all pass on Node 24. Swap, positions, and now Explore (tokens + pools tables + detail
+  pages with charts) are verified against a live local stack: anvil + indexer + `next start`. Wallet
+  connection is still only verified by code inspection + the build; a full browser + wallet run still needs
+  a manual check against the local anvil stack (`dev.sh`).
+- Indexer: `npm test` (40 pass) and `npm run typecheck` clean on Node 24. Verified live against anvil with
+  real Swap events (timestamps spread across an hour to produce multi-point candles).
 - Screens whose contracts or indexer do not exist yet ship disabled with a clear message.

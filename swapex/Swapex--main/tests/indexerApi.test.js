@@ -11,6 +11,8 @@ import {
   indexerConfigured,
   IndexError,
   fetchWithTimeout,
+  isNotFound,
+  indexerErrorMessage,
 } from '../lib/indexerApi'
 import { getFeatures } from '../lib/features'
 
@@ -198,5 +200,28 @@ describe('getFeatures', () => {
       portfolio: false,
       limit: false,
     })
+  })
+})
+
+describe('isNotFound', () => {
+  it('is true only for an HTTP 404 error', () => {
+    expect(isNotFound(new IndexError('nope', { status: 404 }))).toBe(true)
+    expect(isNotFound(new IndexError('nope', { status: 500 }))).toBe(false)
+    expect(isNotFound(new IndexError('nope'))).toBe(false)
+    expect(isNotFound(null)).toBe(false)
+    expect(isNotFound(undefined)).toBe(false)
+  })
+})
+
+describe('indexerErrorMessage', () => {
+  it('says the indexer may be down when there was no HTTP response', () => {
+    expect(indexerErrorMessage(new IndexError('timeout'))).toMatch(/Could not reach the indexer/)
+    expect(indexerErrorMessage(null)).toMatch(/Could not reach the indexer/)
+  })
+  it('names the HTTP status for real responses', () => {
+    expect(indexerErrorMessage(new IndexError('x', { status: 500 }))).toContain('500')
+    expect(indexerErrorMessage(new IndexError('x', { status: 400 }))).toContain('address')
+    expect(indexerErrorMessage(new IndexError('x', { status: 429 }))).toMatch(/Too many requests/)
+    expect(indexerErrorMessage(new IndexError('x', { status: 404 }))).toMatch(/not indexed/)
   })
 })

@@ -78,3 +78,29 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
 - **Reversal:** Remove the dep and the two lib files; the UI layers that will
   consume them (S21/S22) fall back to "indexer not connected".
 
+## 2026-10-18 — Explore screens (S21) build calls
+
+- **No sparklines in the tokens/pools tables:** the UI-prompts file suggested
+  sparklines, but each sparkline needs a candles request per row (N+1 fetches) and
+  the pool detail page already ships the full chart. Deep-linked detail page instead.
+- **`formatUsd`/`formatCompact` keep sub-1 precision** (0.00134, -0.000339 instead of
+  collapsing to "0"), and every number/date goes through pinned `'en-US'` locale
+  formatting — browsers with different locales rendered inconsistent tables.
+- **Indexer `loadManifest` merges `<chainId>.seed.json`** (mirrors the contracts
+  `export-abis.sh`): `deployments/31337.json` has no `tokens` array, so every USD
+  price was null without the seed merge. Reversible by reverting
+  `swapex-indexer/src/deployment.ts` + its test.
+- **Explore 404s map to "Unknown token/pool", not "indexer unreachable":**
+  `indexerApi.isNotFound()` distinguishes the two so a bad address doesn't read as an
+  outage; table `error` prop drives "could not be loaded" vs "nothing indexed yet".
+- **CSP `connect-src` gained exactly the configured indexer origin** (parsed from
+  `NEXT_PUBLIC_INDEXER_URL` at config load). Production builds previously blocked
+  http://127.0.0.1:4000 (connect-src was 'self' https: wss: only), so Explore could
+  never load data behind `next start`; never a wildcard, and dev still allows local
+  anvil ports.
+- **`Web3Context` HMR guard:** module re-evaluation after an edit re-ran
+  `createWeb3ReactRoot(NetworkContextName)` and crashed every page with
+  "A root already exists for provided key NETWORK"; the root is stashed on
+  `globalThis` and reused.
+
+

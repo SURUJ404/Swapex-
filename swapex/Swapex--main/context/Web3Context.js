@@ -15,7 +15,13 @@ const walletlink = new WalletLinkConnector({
 })
 
 const NetworkContextName = 'NETWORK'
-const Web3ProviderNetwork = createWeb3ReactRoot(NetworkContextName)
+// createWeb3ReactRoot throws if the key already exists. Turbopack re-evaluates
+// this module after an edit (and each page entry gets its own copy), which used
+// to crash every page with "A root already exists for provided key NETWORK".
+// Stashing the first root on globalThis makes re-evaluation reuse it instead.
+const NETWORK_ROOT = '__swapexWeb3NetworkRoot'
+const Web3ProviderNetwork =
+  globalThis[NETWORK_ROOT] || (globalThis[NETWORK_ROOT] = createWeb3ReactRoot(NetworkContextName))
 
 function getLibrary(provider) {
   const library = new ethers.providers.Web3Provider(provider)

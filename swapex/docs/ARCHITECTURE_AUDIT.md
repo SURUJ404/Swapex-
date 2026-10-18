@@ -154,9 +154,9 @@ Status: **exists** = works as the target describes; **partial** = present but in
 | Liquidity: positions list | exists | `components/PositionsList.js` + `hooks/usePositions.js` (Transfer-log scan) |
 | New position (pair, fee tier, range, deposits follow range) | exists | `components/NewPositionForm.js` (359 lines; new-pool init, ETH wrap/refund, single multicall) |
 | Position detail: collect / add / remove | exists | `components/PositionDetail.js` (remove 25/50/75/100 + slider, receive-ETH, burn) |
-| Explore: tokens + pools tables (sort, search) | **missing** (honest stub) | `pages/explore.js` → `DataUnavailable` "needs the Swapex indexer" |
-| Explore: detail pages with charts | **missing** | no chart code anywhere |
-| Indexer API client (timeout + validation) | **missing** | `lib/indexerApi.js` does not exist |
+| Explore: tokens + pools tables (sort, search) | exists (S21) | `pages/explore.js` + `ExploreTokensTable.js` / `ExplorePoolsTable.js` (live indexer data, skeletons, empty/error, per-column sort + search) |
+| Explore: detail pages with charts | exists (S21) | `pages/explore/tokens/[address].js`, `pages/explore/pools/[address].js` + hand-rolled SVG `PriceChart.js` (1D/1W/1M candles, no chart lib); no per-row sparklines (N+1 fetches — decision in `docs/DECISIONS.md`) |
+| Indexer API client (timeout + validation) | exists (S20) | `lib/indexerApi.js` (zod-validated, timeout, `isNotFound` / `indexerErrorMessage`) |
 | Portfolio: balances | exists | `components/WalletOverview.js` |
 | Portfolio: positions | partial | `pages/portfolio.js` shows `DataUnavailable` although `/pool` already has the data |
 | Portfolio: activity | partial | `components/TransactionHistory.js` (localStorage only) |
@@ -174,11 +174,11 @@ Status: **exists** = works as the target describes; **partial** = present but in
 |---|---|---|
 | Layers: UI → hooks → services/adapters → clients; no contract calls in components | **missing** (partial today) | contracts constructed in `components/*` and `hooks/*` (§2.3) |
 | Single typed config module (chains, deployments, flags, fee tiers, defaults) | partial | `lib/config.js` is single-source but plain JS; **no feature-flag module** (screens branch on `DEPLOYMENT`/nothing) |
-| Feature flags deciding live screens | partial | implicit: `DataUnavailable` on missing deployment; explore/limit hardcoded stubs |
+| Feature flags deciding live screens | exists (S20) | `lib/features.js` (`explore` needs deployment + indexer URL; `limit` false; `portfolio` deployment) + `DataUnavailable` on missing deployment |
 | Deployments manifest per chain | exists | `lib/deployments/{31337,11155111,84532,421614}.json` + validating loader |
 | ABIs generated from contracts source by one script | exists | `swapex-contracts/scripts/export-abis.sh` (needs `python3`, §1.4) |
-| Typed indexer API client (timeouts, zod/equivalent validation) | **missing** | — |
-| Indexer package (events, reorg-safe, SQLite + repository, HTTP API) | **missing** (skeleton) | `swapex-indexer/src/index.ts` logs "not implemented"; only zod env config + 3 tests |
+| Typed indexer API client (timeouts, zod/equivalent validation) | exists (S20) | `lib/indexerApi.js` (zod schemas, 8s timeout, network vs HTTP error split) |
+| Indexer package (events, reorg-safe, SQLite + repository, HTTP API) | exists (S19–S20) | `swapex-indexer/`: viem event decode, reorg rollback + cursor, better-sqlite3 repo, Fastify HTTP API (tokens/pools/candles/swaps/health); 40 tests + tsc clean; seed-token manifest merge in `src/deployment.ts` |
 | One place mapping contract/wallet errors → messages | exists | `lib/errors.js` |
 | Unit tests for pure logic | exists | 25 tests (amounts/slippage, path, ticks/liquidity) |
 | Component tests for main flows | **missing** | — |

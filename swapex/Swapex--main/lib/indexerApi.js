@@ -171,3 +171,22 @@ export async function getPositions(owner, opts) {
   const body = await getJson(`/positions?owner=${owner}`, z.object({ positions: z.array(positionSchema) }), opts)
   return body && body.positions
 }
+
+/** True when the indexer answered 404 — the address simply is not indexed. */
+export function isNotFound(error) {
+  return Boolean(error) && error.status === 404
+}
+
+/**
+ * Honest banner text for a failed indexer call: transport failures say the
+ * indexer may be down, HTTP errors say which status came back. Callers map
+ * 404 themselves (isNotFound) to an "unknown" state instead of an error.
+ */
+export function indexerErrorMessage(error) {
+  const status = error && error.status
+  if (!status) return 'Could not reach the indexer. Check that it is running, then reload.'
+  if (status === 400) return 'The indexer rejected this request — check the address.'
+  if (status === 404) return 'That address is not indexed.'
+  if (status === 429) return 'Too many requests to the indexer. Wait a moment and reload.'
+  return `The indexer returned an error (HTTP ${status}).`
+}

@@ -1,5 +1,17 @@
 const isProd = process.env.NODE_ENV === 'production'
 
+// The indexer origin must be reachable from the browser, but connect-src only
+// allowed https/wss — so a local indexer on http://127.0.0.1:4000 was blocked in
+// production and Explore could never load. Add exactly the configured origin
+// (never a wildcard). Set NEXT_PUBLIC_INDEXER_URL at build *and* runtime.
+let indexerSource = ''
+try {
+  const raw = process.env.NEXT_PUBLIC_INDEXER_URL
+  if (raw) indexerSource = ` ${new URL(raw).origin}`
+} catch {
+  // invalid URL -> leave it out; the UI shows its honest "not connected" state
+}
+
 // Content-Security-Policy. Next.js needs inline scripts/styles; dev mode also needs eval.
 // connect-src is broad (https/wss) because wallets and RPC providers vary: tighten it to your
 // own RPC and WalletConnect hosts once they are fixed.
@@ -10,7 +22,7 @@ const csp = [
   "img-src 'self' data: https:",
   "font-src 'self' data:",
   // local anvil is plain http, so allow it in development only
-  `connect-src 'self' https: wss:${isProd ? '' : ' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*'}`,
+  `connect-src 'self' https: wss:${indexerSource}${isProd ? '' : ' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*'}`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

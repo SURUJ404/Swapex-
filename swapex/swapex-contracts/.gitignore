@@ -21,3 +21,4 @@ mnemonic*
 
 # local test deployments
 deployments/31337.json
+deployments/31337.seed.json
