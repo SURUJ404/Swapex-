@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/router'
 import { BigNumber, Contract } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
 import positionManagerAbi from '../lib/abi/SwapexPositionManager.json'
@@ -39,6 +40,7 @@ function Row({ k, v }) {
 }
 
 function Detail({ tokenId }) {
+  const router = useRouter()
   const { account, library } = useWeb3()
   const { run, pending } = useTransact()
   const { approve, approving } = useApprove()
@@ -166,7 +168,7 @@ function Detail({ tokenId }) {
   }
 
   const burn = () =>
-    run({ label: `Close position #${pos.id}`, successMessage: 'Position closed', send: () => pm().burn(pos.id), onSuccess: () => (window.location.href = '/pool') })
+    run({ label: `Close position #${pos.id}`, successMessage: 'Position closed', send: () => pm().burn(pos.id), onSuccess: () => router.push('/pool') })
 
   if (error) {
     return <DataUnavailable title="Position not found" needs="a position you own on this network" />

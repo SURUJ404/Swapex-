@@ -13,11 +13,11 @@ export const ALLOW_MAINNET = process.env.NEXT_PUBLIC_ALLOW_MAINNET === 'true'
 export const REQUIRED_CHAIN_ID = Number(process.env.NEXT_PUBLIC_CHAIN_ID || 11155111)
 
 export const CHAINS = {
-  1: { name: 'Ethereum', explorer: 'https://etherscan.io', hexId: '0x1', testnet: false },
-  11155111: { name: 'Sepolia', explorer: 'https://sepolia.etherscan.io', hexId: '0xaa36a7', testnet: true },
-  84532: { name: 'Base Sepolia', explorer: 'https://sepolia.basescan.org', hexId: '0x14a34', testnet: true },
-  421614: { name: 'Arbitrum Sepolia', explorer: 'https://sepolia.arbiscan.io', hexId: '0x66eee', testnet: true },
-  31337: { name: 'Local (anvil)', explorer: '', hexId: '0x7a69', testnet: true },
+  1: { name: 'Ethereum', explorer: 'https://etherscan.io', hexId: '0x1', testnet: false, rpc: 'https://cloudflare-eth.com' },
+  11155111: { name: 'Sepolia', explorer: 'https://sepolia.etherscan.io', hexId: '0xaa36a7', testnet: true, rpc: 'https://rpc.sepolia.org' },
+  84532: { name: 'Base Sepolia', explorer: 'https://sepolia.basescan.org', hexId: '0x14a34', testnet: true, rpc: 'https://sepolia.base.org' },
+  421614: { name: 'Arbitrum Sepolia', explorer: 'https://sepolia.arbiscan.io', hexId: '0x66eee', testnet: true, rpc: 'https://sepolia-rollup.arbitrum.io/rpc' },
+  31337: { name: 'Local (anvil)', explorer: '', hexId: '0x7a69', testnet: true, rpc: 'http://127.0.0.1:8545' },
 }
 
 export const IS_TESTNET = Boolean(CHAINS[REQUIRED_CHAIN_ID]?.testnet)

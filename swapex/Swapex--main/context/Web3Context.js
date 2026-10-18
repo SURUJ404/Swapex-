@@ -5,10 +5,12 @@ import { WalletLinkConnector } from '@web3-react/walletlink-connector'
 import { ethers } from 'ethers'
 import { REQUIRED_CHAIN_ID, CHAINS } from '../lib/config'
 
-const injected = new InjectedConnector({ supportedChainIds: [1, 3, 4, 5, 42] })
+const injected = new InjectedConnector({
+  supportedChainIds: Object.keys(CHAINS).map(Number),
+})
 
 const walletlink = new WalletLinkConnector({
-  url: 'https://mainnet.infura.io/v3/',
+  url: CHAINS[REQUIRED_CHAIN_ID]?.rpc || CHAINS[11155111].rpc,
   appName: 'SWAPEX',
 })
 
