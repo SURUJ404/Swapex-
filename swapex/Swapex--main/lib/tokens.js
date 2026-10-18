@@ -1,6 +1,7 @@
 // Token list for the configured chain: native ETH, WETH, and the test tokens from the deployment manifest.
 // There is no hardcoded mainnet list: addresses differ per chain and a wrong one loses funds.
 import { DEPLOYMENT, WETH_ADDRESS, REQUIRED_CHAIN_ID } from './config'
+import { loadImportedTokens } from './importedTokens'
 
 const ETH_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="16" fill="#627eea"/><path fill="#fff" d="M16 5l-6 10 6 3.5L22 15zM16 19.8L10 16.3 16 27l6-10.7z"/></svg>'
@@ -29,7 +30,26 @@ export function buildTokens(deployment = DEPLOYMENT, weth = WETH_ADDRESS) {
 export const TOKENS = buildTokens()
 export const CHAIN_ID = REQUIRED_CHAIN_ID
 
-export function findToken(address) {
+/** Base list plus the user's imported tokens for `chainId`, read fresh each call. */
+export function getTokens(chainId = REQUIRED_CHAIN_ID, storage) {
+  return [...TOKENS, ...loadImportedTokens(chainId, storage)]
+}
+
+export function findToken(address, chainId = REQUIRED_CHAIN_ID, storage) {
   if (!address) return null
-  return TOKENS.find((t) => t.address.toLowerCase() === address.toLowerCase()) || null
+  const a = address.toLowerCase()
+  return getTokens(chainId, storage).find((t) => t.address.toLowerCase() === a) || null
+}
+
+/** Filter by symbol, name or address (case-insensitive). Empty query returns everything. */
+export function searchTokens(query, chainId = REQUIRED_CHAIN_ID, storage) {
+  const q = (query || '').trim().toLowerCase()
+  const list = getTokens(chainId, storage)
+  if (!q) return list
+  return list.filter(
+    (t) =>
+      t.symbol.toLowerCase().includes(q) ||
+      t.name.toLowerCase().includes(q) ||
+      t.address.toLowerCase() === q
+  )
 }
