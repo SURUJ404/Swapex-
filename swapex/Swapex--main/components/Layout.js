@@ -6,6 +6,7 @@ import Footer from './Footer'
 import TransactionHistory from './TransactionHistory'
 import TestnetBanner from './TestnetBanner'
 import WalletModal from './WalletModal'
+import ThemeToggle from './ThemeToggle'
 
 const NAV = [
   { href: '/', label: 'Swap', match: (p) => ['/', '/send', '/limit'].includes(p) },
@@ -56,6 +57,7 @@ export default function Layout({ children }) {
           </nav>
 
           <div className="flex items-center gap-2 justify-self-end">
+            <ThemeToggle />
             {active ? (
               <div className="flex items-center gap-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-[var(--success)]" />
