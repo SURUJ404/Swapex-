@@ -47,9 +47,16 @@ export function openDb(path: string): Db {
     CREATE TABLE IF NOT EXISTS blocks (
       number INTEGER PRIMARY KEY,
       hash TEXT NOT NULL,
-      parent_hash TEXT NOT NULL
+      parent_hash TEXT NOT NULL,
+      timestamp INTEGER NOT NULL DEFAULT 0
     );
+    CREATE INDEX IF NOT EXISTS idx_events_addr_event ON events(address, event);
   `)
+  // Migrate databases created before block timestamps existed.
+  const cols = db.prepare('PRAGMA table_info(blocks)').all() as { name: string }[]
+  if (!cols.some((c) => c.name === 'timestamp')) {
+    db.exec('ALTER TABLE blocks ADD COLUMN timestamp INTEGER NOT NULL DEFAULT 0')
+  }
   return db
 }
 
@@ -105,21 +112,22 @@ export interface StoredBlock {
   number: number
   hash: string
   parentHash: string
+  timestamp: number
 }
 
-/** Remember a block's hash (within the unfinalized window) for later reorg checks. */
+/** Remember a block's hash + timestamp (for reorg checks and time windows). */
 export function recordBlock(db: Db, block: StoredBlock): void {
   db.prepare(
-    `INSERT OR REPLACE INTO blocks (number, hash, parent_hash) VALUES (?, ?, ?)`
-  ).run(block.number, block.hash.toLowerCase(), block.parentHash.toLowerCase())
+    `INSERT OR REPLACE INTO blocks (number, hash, parent_hash, timestamp) VALUES (?, ?, ?, ?)`
+  ).run(block.number, block.hash.toLowerCase(), block.parentHash.toLowerCase(), block.timestamp)
 }
 
-/** Stored block hashes, newest first. */
-export function recentBlocksDesc(db: Db): StoredBlock[] {
-  const rows = db
-    .prepare('SELECT number, hash, parent_hash FROM blocks ORDER BY number DESC')
-    .all() as { number: number; hash: string; parent_hash: string }[]
-  return rows.map((r) => ({ number: r.number, hash: r.hash, parentHash: r.parent_hash }))
+/** Unix timestamp (seconds) of a block we stored, or null. */
+export function blockTimestamp(db: Db, blockNumber: number): number | null {
+  const row = db.prepare('SELECT timestamp FROM blocks WHERE number = ?').get(blockNumber) as
+    | { timestamp: number }
+    | undefined
+  return row && row.timestamp > 0 ? row.timestamp : null
 }
 
 export function deleteBlocksAfter(db: Db, block: number): void {
@@ -129,4 +137,12 @@ export function deleteBlocksAfter(db: Db, block: number): void {
 /** Drop block hashes older than `before` (the window is all reorg checks need). */
 export function pruneBlocksBefore(db: Db, before: number): void {
   db.prepare('DELETE FROM blocks WHERE number < ?').run(before)
+}
+
+/** Stored block hashes, newest first (reorg checks walk this). */
+export function recentBlocksDesc(db: Db): StoredBlock[] {
+  const rows = db
+    .prepare('SELECT number, hash, parent_hash, timestamp FROM blocks ORDER BY number DESC')
+    .all() as { number: number; hash: string; parent_hash: string; timestamp: number }[]
+  return rows.map((r) => ({ number: r.number, hash: r.hash, parentHash: r.parent_hash, timestamp: r.timestamp }))
 }

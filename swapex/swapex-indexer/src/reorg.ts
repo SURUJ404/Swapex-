@@ -18,16 +18,19 @@ export interface ReorgResult {
 }
 
 /**
- * Compare stored block hashes (newest first) against the chain. Reorgs are
- * contiguous from the tip, so the first still-matching block ends the walk.
- * Everything above the fork point — events, pools, block hashes, cursor — is
- * rolled back in one transaction so the next pass re-indexes the new chain.
+ * Compare stored block hashes (newest first, up to `reorgDepth` rows) against
+ * the chain. Reorgs are contiguous from the tip, so the first still-matching
+ * block ends the walk. Everything above the fork point — events, pools, block
+ * hashes, cursor — is rolled back in one transaction so the next pass
+ * re-indexes the new chain. Block rows are kept for their timestamps, so the
+ * walk is depth-limited.
  */
 export async function checkAndRollback(
   client: Pick<ReorgClient, 'getBlock'>,
-  db: Db
+  db: Db,
+  reorgDepth = 12
 ): Promise<ReorgResult> {
-  const stored = recentBlocksDesc(db)
+  const stored = recentBlocksDesc(db).slice(0, reorgDepth)
   let rolledBackTo: number | null = null
   let checked = 0
 

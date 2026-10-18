@@ -8,7 +8,6 @@ import {
   insertPool,
   poolAddresses,
   recordBlock,
-  pruneBlocksBefore,
   type Db,
   type StoredEvent,
 } from './db'
@@ -44,7 +43,7 @@ export async function runOnce(
   manifest: Manifest,
   reorgDepth = 12
 ): Promise<IndexResult | null> {
-  const reorg = await checkAndRollback(client, db)
+  const reorg = await checkAndRollback(client, db, reorgDepth)
 
   const head = Number(await client.getBlockNumber())
   const last = getCursor(db)
@@ -78,13 +77,21 @@ export async function runOnce(
     events = events.concat(decodeLogs(await fetchLogs(newPools)))
   }
 
-  // Hashes for the unfinalized window only (bounded getBlock calls per pass).
+  // Hashes + timestamps: every event-bearing block (time windows and candles need
+  // timestamps) plus the unfinalized window (reorg checks need hashes).
   const windowFrom = Math.max(from, to - reorgDepth + 1)
-  const blockHashes = new Map<number, { hash: string; parentHash: string }>()
-  for (let n = windowFrom; n <= to; n++) {
+  const wanted = new Set<number>()
+  for (let n = windowFrom; n <= to; n++) wanted.add(n)
+  for (const e of events) wanted.add(e.blockNumber)
+  const blocks = new Map<number, { hash: string; parentHash: string; timestamp: number }>()
+  for (const n of wanted) {
     const block = await client.getBlock({ blockNumber: BigInt(n) })
     if (block?.hash) {
-      blockHashes.set(n, { hash: block.hash, parentHash: block.parentHash ?? '0x' })
+      blocks.set(n, {
+        hash: block.hash,
+        parentHash: block.parentHash ?? '0x',
+        timestamp: Number(block.timestamp ?? 0),
+      })
     }
   }
 
@@ -108,10 +115,9 @@ export async function runOnce(
         createdBlock: e.blockNumber,
       })
     }
-    for (const [number, { hash, parentHash }] of blockHashes) {
-      recordBlock(db, { number, hash, parentHash })
+    for (const [number, { hash, parentHash, timestamp }] of blocks) {
+      recordBlock(db, { number, hash, parentHash, timestamp })
     }
-    pruneBlocksBefore(db, Math.max(0, to - reorgDepth + 1))
     setCursor(db, to)
   })
   store(events)

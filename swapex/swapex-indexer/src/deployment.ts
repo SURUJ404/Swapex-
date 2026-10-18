@@ -7,6 +7,16 @@ const manifestSchema = z.object({
   blockNumber: z.number().int().nonnegative().default(0),
   factory: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   positionManager: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  tokens: z
+    .array(
+      z.object({
+        address: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+        symbol: z.string(),
+        name: z.string(),
+        decimals: z.number().int().nonnegative(),
+      })
+    )
+    .default([]),
 })
 
 export type Manifest = z.infer<typeof manifestSchema>
