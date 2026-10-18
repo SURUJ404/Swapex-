@@ -1,7 +1,4 @@
-import { utils } from 'ethers'
-import routerAbi from './abi/SwapexRouter.json'
-import positionManagerAbi from './abi/SwapexPositionManager.json'
-import quoterAbi from './abi/SwapexQuoter.json'
+import { getInterface } from './contracts/client'
 
 // Custom errors the Swapex contracts can revert with, in plain language.
 const CONTRACT_ERRORS = {
@@ -21,7 +18,8 @@ const CONTRACT_ERRORS = {
   NotAuthorized: 'You are not allowed to manage this position.',
 }
 
-const IFACES = [routerAbi, positionManagerAbi, quoterAbi].map((abi) => new utils.Interface(abi))
+// Interfaces come from the adapter layer (deduped ABIs, single source of truth).
+const IFACES = ['router', 'positionManager', 'quoter'].map((name) => getInterface(name))
 
 function revertData(e) {
   const candidates = [e?.data, e?.error?.data, e?.error?.error?.data, e?.data?.data, e?.error?.data?.data]
