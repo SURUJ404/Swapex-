@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { utils } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
+import Skeleton from './Skeleton'
 import { exactInput, multicall, encodeExactInput, encodeUnwrapWETH9, ADDRESS_THIS } from '../lib/contracts/router'
 import { TOKENS, findToken } from '../lib/tokens'
 import DataUnavailable from './DataUnavailable'
@@ -254,6 +255,15 @@ function SwapForm() {
           </div>
         </div>
       </div>
+
+      {quoting && !route && (
+        <div className="mt-4 space-y-2" role="status" aria-label="Fetching best price">
+          <span className="sr-only">Fetching best price…</span>
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-5/6" />
+          <Skeleton className="h-3 w-2/3" />
+        </div>
+      )}
 
       {route && (
         <div className="mt-4 space-y-1 text-xs text-[var(--text-tertiary)] font-mono">

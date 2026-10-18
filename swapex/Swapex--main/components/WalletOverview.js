@@ -3,19 +3,29 @@ import { ethers } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
 import { balanceOf, decimals } from '../lib/contracts/erc20'
 import { TOKENS as TOKEN_LIST } from '../lib/tokens'
+import Skeleton from './Skeleton'
 
 export default function WalletOverview() {
   const { account, library, balance } = useWeb3()
   const [tokenBalances, setTokenBalances] = useState({})
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!account || !library) {
       Promise.resolve()
-        .then(() => setTokenBalances({}))
+        .then(() => {
+          setTokenBalances({})
+          setLoading(false)
+        })
         .catch(() => {})
-      return
+      return undefined
     }
     let stale = false
+    Promise.resolve()
+      .then(() => {
+        if (!stale) setLoading(true)
+      })
+      .catch(() => {})
     async function fetchAll() {
       const results = {}
       const nonNative = TOKEN_LIST.filter((t) => t.address !== 'NATIVE')
@@ -28,7 +38,10 @@ export default function WalletOverview() {
           results[token.symbol] = '0'
         }
       }
-      if (!stale) setTokenBalances(results)
+      if (!stale) {
+        setTokenBalances(results)
+        setLoading(false)
+      }
     }
     fetchAll()
     return () => { stale = true }
@@ -50,7 +63,7 @@ export default function WalletOverview() {
             <span className="font-medium text-[var(--text-primary)]">ETH</span>
           </div>
           <span className="font-mono text-sm text-[var(--text-secondary)]">
-            {parseFloat(balance).toFixed(4)}
+            {loading ? <Skeleton className="h-4 w-16 inline-block" /> : parseFloat(balance).toFixed(4)}
           </span>
         </div>
         {TOKEN_LIST.filter((t) => t.address !== 'NATIVE').map((token) => (
@@ -60,7 +73,7 @@ export default function WalletOverview() {
               <span className="text-sm text-[var(--text-secondary)]">{token.symbol}</span>
             </div>
             <span className="text-sm font-mono text-[var(--text-secondary)]">
-              {parseFloat(tokenBalances[token.symbol] || '0').toFixed(4)}
+              {loading ? <Skeleton className="h-4 w-16 inline-block" /> : parseFloat(tokenBalances[token.symbol] || '0').toFixed(4)}
             </span>
           </div>
         ))}

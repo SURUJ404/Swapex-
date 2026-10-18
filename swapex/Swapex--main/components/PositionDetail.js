@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { BigNumber } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
+import Skeleton from './Skeleton'
 import {
   collect as pmCollect,
   increaseLiquidity as pmIncreaseLiquidity,
@@ -177,7 +178,18 @@ function Detail({ tokenId }) {
   if (error) {
     return <DataUnavailable title="Position not found" needs="a position you own on this network" />
   }
-  if (!pos) return <div className="text-sm text-[var(--text-tertiary)]">Loading position…</div>
+  if (!pos)
+    return (
+      <div role="status" aria-label="Loading position" className="bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-6 space-y-4">
+        <span className="sr-only">Loading position…</span>
+        <div className="flex items-center gap-3">
+          <Skeleton className="w-8 h-8 rounded-full" />
+          <Skeleton className="h-5 w-32" />
+        </div>
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-2/3" />
+      </div>
+    )
 
   const spacing = tickSpacingFor(pos.fee)
   const { min, max } = usableRange(spacing)

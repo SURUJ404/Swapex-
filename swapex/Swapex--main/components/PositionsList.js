@@ -4,6 +4,7 @@ import { useWeb3 } from '../context/Web3Context'
 import usePositions from '../hooks/usePositions'
 import DataUnavailable from './DataUnavailable'
 import NetworkGuard from './NetworkGuard'
+import Skeleton from './Skeleton'
 import { DEPLOYMENT } from '../lib/config'
 import { tickToPrice, formatPrice, usableRange, tickSpacingFor } from '../lib/ticks'
 
@@ -48,7 +49,19 @@ export default function PositionsList() {
           Could not load positions. Check your network connection and RPC, then reload.
         </div>
       ) : loading && positions.length === 0 ? (
-        <div className="text-sm text-[var(--text-tertiary)]">Loading positions…</div>
+        <div className="space-y-3" role="status" aria-label="Loading positions">
+          <span className="sr-only">Loading positions…</span>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-4">
+              <div className="flex items-center gap-3">
+                <Skeleton className="w-7 h-7 rounded-full" />
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-4 w-12 ml-auto" />
+              </div>
+              <Skeleton className="mt-3 h-3 w-40" />
+            </div>
+          ))}
+        </div>
       ) : positions.length === 0 ? (
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--bg-secondary)] p-8 text-center">
           <p className="text-sm text-[var(--text-secondary)]">You have no positions yet. Provide liquidity to earn trading fees.</p>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/router'
 import { BigNumber } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
+import Skeleton from './Skeleton'
 import { getPool, slot0 } from '../lib/contracts/factory'
 import {
   multicall, encodeMint, encodeRefundETH, encodeCreateAndInitializePoolIfNecessary,
@@ -274,6 +275,14 @@ function Form() {
           </button>
         ))}
       </div>
+
+      {!sameToken && pool.loading && (
+        <div className="mb-5 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4 space-y-2" role="status" aria-label="Loading pool">
+          <span className="sr-only">Loading pool…</span>
+          <Skeleton className="h-4 w-1/2" />
+          <Skeleton className="h-8 w-full" />
+        </div>
+      )}
 
       {!sameToken && !pool.loading && !poolExists && (
         <div className="mb-5 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4">
