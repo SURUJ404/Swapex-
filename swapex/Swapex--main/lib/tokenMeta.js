@@ -1,5 +1,4 @@
-import { Contract } from 'ethers'
-import { ERC20_ABI } from '../constants'
+import { symbol as erc20Symbol, decimals as erc20Decimals } from './contracts/erc20'
 import { findToken, tokenLogo } from './tokens'
 
 const cache = new Map()
@@ -10,11 +9,10 @@ export async function getTokenMeta(library, address) {
   if (known) return known
   const key = address.toLowerCase()
   if (cache.has(key)) return cache.get(key)
-  const c = new Contract(address, ERC20_ABI, library)
   let symbol = 'TOKEN'
   let decimals = 18
   try {
-    ;[symbol, decimals] = await Promise.all([c.symbol(), c.decimals()])
+    ;[symbol, decimals] = await Promise.all([erc20Symbol(library, address), erc20Decimals(library, address)])
   } catch {
     // non-standard token: keep the defaults rather than failing the whole screen
   }

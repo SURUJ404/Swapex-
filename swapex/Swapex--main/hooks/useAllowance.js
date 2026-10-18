@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BigNumber, Contract, constants } from 'ethers'
+import { BigNumber, constants } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { ERC20_ABI } from '../constants'
+import { allowance as readAllowance } from '../lib/contracts/erc20'
 
 /** ERC-20 allowance for `spender`. Native ETH never needs approval. */
 export default function useAllowance(token, spender) {
@@ -19,7 +19,7 @@ export default function useAllowance(token, spender) {
       return
     }
     try {
-      const a = await new Contract(address, ERC20_ABI, library).allowance(account, spender)
+      const a = await readAllowance(library, address, account, spender)
       setAllowance(BigNumber.from(a))
     } catch {
       setAllowance(null)

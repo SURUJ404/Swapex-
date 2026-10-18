@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
-import { Contract, utils } from 'ethers'
+import { utils } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { ERC20_ABI } from '../constants'
+import { transfer } from '../lib/contracts/erc20'
 import { TOKENS as TOKEN_LIST } from '../lib/tokens'
 import TokenSelectModal from './TokenSelectModal'
 import NetworkGuard from './NetworkGuard'
@@ -44,7 +44,7 @@ export default function SendForm() {
       send: () =>
         selectedToken.address === 'NATIVE'
           ? signer.sendTransaction({ to: recipient, value: amountBn })
-          : new Contract(selectedToken.address, ERC20_ABI, signer).transfer(recipient, amountBn),
+          : transfer(signer, selectedToken.address, recipient, amountBn),
       onSuccess: () => {
         setAmount('')
         setRecipient('')

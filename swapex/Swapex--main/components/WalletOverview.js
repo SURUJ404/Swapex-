@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { ethers } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { ERC20_ABI } from '../constants'
+import { balanceOf, decimals } from '../lib/contracts/erc20'
 import { TOKENS as TOKEN_LIST } from '../lib/tokens'
 
 export default function WalletOverview() {
@@ -21,10 +21,9 @@ export default function WalletOverview() {
       const nonNative = TOKEN_LIST.filter((t) => t.address !== 'NATIVE')
       for (const token of nonNative) {
         try {
-          const contract = new ethers.Contract(token.address, ERC20_ABI, library)
-          const bal = await contract.balanceOf(account)
-          const decimals = await contract.decimals()
-          results[token.symbol] = ethers.utils.formatUnits(bal, decimals)
+          const bal = await balanceOf(library, token.address, account)
+          const dec = await decimals(library, token.address)
+          results[token.symbol] = ethers.utils.formatUnits(bal, dec)
         } catch {
           results[token.symbol] = '0'
         }

@@ -1,26 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Contract } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import positionManagerAbi from '../lib/abi/SwapexPositionManager.json'
-import factoryAbi from '../lib/abi/SwapexFactory.json'
-import poolAbi from '../lib/abi/SwapexPool.json'
+import { ownerOf, position } from '../lib/contracts/positionManager'
+import { getPool, slot0 } from '../lib/contracts/factory'
+import { positionIdsTransferredTo, ownedTokenIds } from '../lib/contracts/events'
 import { DEPLOYMENT } from '../lib/config'
 import { getTokenMeta } from '../lib/tokenMeta'
 import { sqrtPriceX96ToTick, isInRange } from '../lib/ticks'
 
 /** Everything the UI needs about one position NFT, in one place. */
 export async function loadPosition(library, tokenId) {
-  const pm = new Contract(DEPLOYMENT.positionManager, positionManagerAbi, library)
-  const factory = new Contract(DEPLOYMENT.factory, factoryAbi, library)
-  const [owner, p] = await Promise.all([pm.ownerOf(tokenId), pm.positions(tokenId)])
+  const [owner, p] = await Promise.all([ownerOf(library, tokenId), position(library, tokenId)])
   const [token0, token1, poolAddress] = await Promise.all([
     getTokenMeta(library, p.token0),
     getTokenMeta(library, p.token1),
-    factory.getPool(p.token0, p.token1, p.fee),
+    getPool(library, p.token0, p.token1, p.fee),
   ])
-  const slot0 = await new Contract(poolAddress, poolAbi, library).slot0()
-  const sqrtPriceX96 = slot0.sqrtPriceX96.toString()
-  const currentTick = Number(slot0.tick)
+  const s0 = await slot0(library, poolAddress)
+  const sqrtPriceX96 = s0.sqrtPriceX96.toString()
+  const currentTick = Number(s0.tick)
   return {
     id: tokenId.toString(),
     owner,
@@ -57,18 +54,8 @@ export default function usePositions() {
     setLoading(true)
     setError(null)
     try {
-      const pm = new Contract(DEPLOYMENT.positionManager, positionManagerAbi, library)
-      const from = DEPLOYMENT.blockNumber || 0
-      const logs = await pm.queryFilter(pm.filters.Transfer(null, account), from)
-      const ids = [...new Set(logs.map((l) => l.args.tokenId.toString()))]
-      const owned = []
-      for (const id of ids) {
-        try {
-          if ((await pm.ownerOf(id)).toLowerCase() === account.toLowerCase()) owned.push(id)
-        } catch {
-          // burned
-        }
-      }
+      const ids = await positionIdsTransferredTo(library, account)
+      const owned = await ownedTokenIds(library, account, ids)
       const loaded = await Promise.all(owned.map((id) => loadPosition(library, id)))
       loaded.sort((a, b) => Number(b.id) - Number(a.id))
       setPositions(loaded)

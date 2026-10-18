@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BigNumber, Contract } from 'ethers'
+import { BigNumber } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import { ERC20_ABI } from '../constants'
+import { balanceOf } from '../lib/contracts/erc20'
 
 /** Balance of a token entry ({address, decimals}) as base units. Refreshes on each new block. */
 export default function useTokenBalance(token) {
@@ -19,7 +19,7 @@ export default function useTokenBalance(token) {
       const bal =
         address === 'NATIVE'
           ? await library.getBalance(account)
-          : await new Contract(address, ERC20_ABI, library).balanceOf(account)
+          : await balanceOf(library, address, account)
       setBalance(bal)
     } catch (e) {
       console.error('useTokenBalance error:', e)

@@ -1,8 +1,7 @@
 import { useCallback } from 'react'
-import { Contract } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
 import useTransact from './useTransact'
-import { ERC20_ABI } from '../constants'
+import { approve as approveToken } from '../lib/contracts/erc20'
 
 /** Approve exactly `amount` (not unlimited) for `spender`. */
 export default function useApprove() {
@@ -15,10 +14,7 @@ export default function useApprove() {
         label: `Approve ${token.symbol}`,
         successMessage: `${token.symbol} approved`,
         onSuccess,
-        send: async () => {
-          const c = new Contract(token.address, ERC20_ABI, library.getSigner())
-          return c.approve(spender, amount)
-        },
+        send: () => approveToken(library.getSigner(), token.address, spender, amount),
       }),
     [library, run]
   )
