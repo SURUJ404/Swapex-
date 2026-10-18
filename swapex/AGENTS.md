@@ -25,6 +25,8 @@ Open-source, testnet-only DEX built from scratch (Uniswap-style V3 pools; V4-sty
 5. Contract addresses come from deployments/<chainId>.json via lib/deployments. Never hardcode addresses.
 6. Custom contract errors are decoded in Swapex--main/lib/errors.js; add new ones there.
 7. Ask the owner only for irreversible or scope-changing decisions; otherwise decide and note it in docs/DECISIONS.md.
+8. Every commit message is exactly `latest release` (owner's standing instruction). Step detail lives in
+   docs/DECISIONS.md and the docs, not in commit subjects; the release point is the `latest-release` tag.
 
 ## Known facts
 - Pool position key is keccak(owner, tickLower, tickUpper); the position manager owns all pool positions and tracks NFT shares.
