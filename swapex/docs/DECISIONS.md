@@ -42,3 +42,24 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   gives a proper "wrong network → switch" UX instead of a thrown error.
 - **Reversal:** Restore the old array and URL strings in `context/Web3Context.js`
   and drop `rpc` from `lib/config.js`.
+
+## 2026-10-18 — netlify.toml SPA redirect removed with the env vars (S3)
+
+- **Decision:** Alongside the plan's `REACT_APP_*` env-var cleanup, removed the
+  `/* → /index.html` (status 200) redirect from `netlify.toml`. Kept the country-block
+  redirect.
+- **Rationale:** The redirect is CRA-era and targets a file Next.js never emits; if the
+  site were deployed to Netlify as-is it would shadow every Next route. The plan said
+  "env vars", but leaving a routing footgun contradicted the same cleanup intent.
+- **Reversal:** Re-add the redirect block if a CRA-style host is ever used again (it
+  should not be — this is a Next.js app).
+
+## 2026-10-18 — S4 dead-weight removal (plan items, no judgment calls)
+
+- Removed unused deps `styled-components` and `@reach/tooltip` (`@reach/dialog` stays —
+  used by TokenSelectModal); deleted dead `public/locales/` (10 files, contained a
+  "Uniswap V1" string, zero imports anywhere) and the now-unreferenced
+  `public/images/wallets/walletconnect.svg`; rewrote `README.md` for the current app;
+  refreshed the "Honest status" section of `docs/UI_PARITY.md`. All plan-literal;
+  reversal is a plain `git revert` of the S4 commit.
+
