@@ -39,7 +39,7 @@ Swapex stays Next.js. We copy the *experience*, not the code.
 ## Work packages
 - W1 Design system: tokens (color, radius, spacing, type), dark/light, Button, Card,
   Input, Modal, Tabs, Skeleton, Toast. Own palette, same density and layout as the reference.
-- W2 App shell: top nav (Swap, Explore, Portfolio/Positions, network + wallet), mobile
+- W2 App shell (done): top nav (Swap, Explore, Portfolio/Positions, network + wallet), mobile
   bottom bar, search (token/pool/address), footer.
 - W3 Swap page: token inputs with balance and max, flip, token select modal with search
   and import warning, route/price details accordion, confirm modal, pending/success states.
@@ -55,21 +55,27 @@ Swapex stays Next.js. We copy the *experience*, not the code.
   seed scripts, local end-to-end script, ABIs and manifests exported to lib/abi and lib/deployments.
 - Done: swap page talks to the router and quoter (best route over fee tiers and via WETH, ETH in and out,
   slippage, deadline, price impact, contract errors decoded).
-- Done: positions UI against SwapexPositionManager: /pool (your positions, read from NFT Transfer events),
+- Done: positions UI against SwapexPositionManager: /pool (your positions, from NFT Transfer
+  events or the indexer's /positions?owner= when connected),
   /add (pair, fee tier, price range or full range, starting price for a new pool, deposits that follow the
   range, approvals, native ETH, one-transaction pool creation + mint), /pool/<id> (value, collect, add,
   remove with optional receive-ETH, close). Range math is tested and matches the contract to about 1e-10.
-- Done: Explore against the local indexer: /explore (tokens + pools, sort, search), /explore/tokens/<addr>,
-  /explore/pools/<addr> (stats, 1D/1W/1M SVG price chart from indexer candles, recent swaps). Honest
-  empty/error/not-connected states everywhere; no fake numbers.
-- Next: limit orders, viem + wagmi migration, a swap confirmation modal.
+- Done: Explore against the local indexer: /explore (tokens + pools tables, sort, search),
+  /explore/tokens/<addr>, /explore/pools/<addr> (stats, 1D/1W/1M SVG price chart from indexer
+  candles, recent swaps). Honest empty/error/not-connected states everywhere; no fake numbers.
+- Done: top-nav search (symbol, pool pair, or 0x address) routing to explore detail pages or
+  the filtered list; positions discovery prefers the indexer with ownerOf verification and a
+  cursor-gap Transfer scan, full event scan as fallback.
+- Next: limit orders and the viem + wagmi migration (W8).
 - Removed: the old V2 add/remove/create/pool forms. /remove and /create redirect to /pool and /add.
 
 ## Honest status
 - Contracts: compiled and tested here with Foundry (80+ tests pass) and exercised end to end on a local anvil node.
-- Web app: `npm ci`, `npm test` (104 pass), `npm run lint` (0 errors, pre-existing `<img>` warnings only) and
+- Web app: `npm ci`, `npm test` (129 pass), `npm run lint` (0 errors, pre-existing `<img>` warnings only) and
   `npm run build` all pass on Node 24. Swap, positions, and now Explore (tokens + pools tables + detail
-  pages with charts) are verified against a live local stack: anvil + indexer + `next start`. Wallet
+  pages with charts) are verified against a live local stack: anvil + indexer + `next start`, including
+  the top-nav search routes (symbol/pair/address, ambiguous and no-match fallbacks, indexer-down banner)
+  and position ids from the indexer cross-checked against on-chain `ownerOf`. Wallet
   connection is still only verified by code inspection + the build; a full browser + wallet run still needs
   a manual check against the local anvil stack (`dev.sh`).
 - Indexer: `npm test` (40 pass) and `npm run typecheck` clean on Node 24. Verified live against anvil with

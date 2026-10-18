@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useRouter } from 'next/router'
 import DataUnavailable from '../components/DataUnavailable'
 import ExploreTokensTable, { ExploreTokensTableSkeleton } from '../components/ExploreTokensTable'
 import ExplorePoolsTable, { ExplorePoolsTableSkeleton } from '../components/ExplorePoolsTable'
@@ -9,6 +10,10 @@ const POOL_LIMIT = 100
 
 export default function ExplorePage() {
   const features = getFeatures()
+  const router = useRouter()
+  // ?q= from a nav-search fallback: prefills both table filters once the
+  // router has hydrated (router.query is empty on the first render).
+  const initialQuery = typeof router.query.q === 'string' ? router.query.q : ''
   const [tokens, setTokens] = useState([])
   const [pools, setPools] = useState([])
   const [loading, setLoading] = useState(features.explore)
@@ -59,14 +64,22 @@ export default function ExplorePage() {
         <h2 id="explore-tokens-heading" className="text-lg font-semibold mb-3">
           Tokens
         </h2>
-        {loading ? <ExploreTokensTableSkeleton /> : <ExploreTokensTable tokens={tokens} error={Boolean(error)} />}
+        {loading ? (
+          <ExploreTokensTableSkeleton />
+        ) : (
+          <ExploreTokensTable key={`tokens:${initialQuery}`} tokens={tokens} error={Boolean(error)} initialQuery={initialQuery} />
+        )}
       </section>
 
       <section aria-labelledby="explore-pools-heading">
         <h2 id="explore-pools-heading" className="text-lg font-semibold mb-3">
           Pools
         </h2>
-        {loading ? <ExplorePoolsTableSkeleton /> : <ExplorePoolsTable pools={pools} error={Boolean(error)} />}
+        {loading ? (
+          <ExplorePoolsTableSkeleton />
+        ) : (
+          <ExplorePoolsTable key={`pools:${initialQuery}`} pools={pools} error={Boolean(error)} initialQuery={initialQuery} />
+        )}
       </section>
     </div>
   )

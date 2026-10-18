@@ -222,7 +222,9 @@ Status: **exists** = works as the target describes; **partial** = present but in
    without a provider, and hides chain calls from review. Planned adapter layer (S5–S8).
 10. **Positions discovery scans `Transfer` logs from `blockNumber` (0 in the anvil manifest)** —
     `hooks/usePositions.js:61-62`. Works on anvil; on public testnets full-range `queryFilter` will hit RPC
-    log-range limits as history grows. Indexer `/positions?owner=` is the intended fix (S22).
+    log-range limits as history grows. Indexer `/positions?owner=` is the intended fix —
+    shipped in S22 (indexer-first with chain-checked health, cursor gap scan and `ownerOf`
+    verification; the event scan remains the fallback).
 11. **Test gaps**: no component or browser tests; `lib/errors.js` is never tested against real Swapex error
     selectors (tests cover only legacy string heuristics); ethers emits `duplicate definition - InvalidPath()`
     while building interfaces (duplicate error names across ABIs — cosmetic, should be deduped in one place).

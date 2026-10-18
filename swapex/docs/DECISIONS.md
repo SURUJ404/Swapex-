@@ -104,3 +104,33 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   `globalThis` and reused.
 
 
+
+## 2026-10-19 - Positions via indexer + nav search (S22)
+
+- **Position id discovery is indexer-first with three guards:** (1) `/health` must report the
+  same `chainId` this build targets and a non-null cursor, else the full Transfer-log scan runs
+  (a cross-chain or unsynced indexer must never feed ids); (2) ids from `/positions?owner=`
+  are merged with a small Transfer scan starting at the cursor block (rows and cursor are
+  written atomically, so rows + cursor->head is a complete union - no delayed recheck); (3)
+  every id is re-verified on chain via `ownerOf` (`ownedTokenIds`) before it can surface a
+  position, and hydration reuses the existing `loadPosition`. Indexer absent/failing/empty
+  -> exactly the pre-indexer event scan. Reversible: `git revert` restores the old refetch.
+- **Nav search never guesses a route:** addresses resolve through direct `/tokens/<addr>`
+  then `/pools/<addr>` lookups (a paginated list could hide an address); 404/404 -> the
+  filtered list `/explore?q=...`, and a transport failure lands there too, where the page's
+  own banner reports the outage (the two expected 404 lookups appear as console
+  "Failed to load resource" noise; the responses are caught by `isNotFound`).
+- **Ambiguous queries fall to the list, never a pick:** exact single symbol -> token detail;
+  unique pair (`sym0/sym1` or `sym0 - sym1`, either order) -> pool detail; duplicate symbols
+  or multi-fee-tier pairs -> `/explore?q=...` where both tables filter. `?q=` prefills the
+  table inputs via a key remount because `react-hooks/set-state-in-effect` forbids setState
+  inside an effect.
+- **Mobile search is a header toggle:** a `md:hidden` icon expands the same input into a row
+  under the header; the bottom nav keeps its Explore entry, so no second mobile affordance.
+- **Verified by running:** web 129 tests / lint 0 errors / prod build; CDP against the live
+  stack (anvil + indexer + `next start`): `weth` -> token detail, `weth/tusdc` -> pool
+  detail, unknown address and `zzz` -> `/explore?q=` with both tables filtered (deep-loaded
+  `?q=` prefills both inputs), indexer stopped -> "Could not reach the indexer..." banner +
+  table error states, 375px toggle -> search -> detail; indexer rows for anvil account 0
+  (ids 1-3) match `ownerOf` on chain. Wallet-connected UI path not exercised headless -
+  the id source is covered by unit tests + the chain cross-check above.

@@ -8,6 +8,7 @@ import TestnetBanner from './TestnetBanner'
 import WalletModal from './WalletModal'
 import ThemeToggle from './ThemeToggle'
 import NetworkMenu from './NetworkMenu'
+import NavSearch from './NavSearch'
 
 const NAV = [
   { href: '/', label: 'Swap', match: (p) => ['/', '/send', '/limit'].includes(p) },
@@ -40,22 +41,25 @@ export default function Layout({ children }) {
             <span className="text-lg font-semibold tracking-tight text-[var(--accent)]">Swapex</span>
           </Link>
 
-          <nav aria-label="Primary" className="hidden md:flex items-center justify-center gap-1">
-            {NAV.map(({ href, label, match }) => (
-              <Link
-                key={href}
-                href={href}
-                aria-current={match(path) ? 'page' : undefined}
-                className={`px-4 py-2 rounded-full text-sm font-medium no-underline transition-colors ${
-                  match(path)
-                    ? 'bg-[var(--bg-card)] text-[var(--text-primary)]'
-                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                }`}
-              >
-                {label}
-              </Link>
-            ))}
-          </nav>
+          <div className="flex items-center justify-center gap-3 min-w-0">
+            <nav aria-label="Primary" className="hidden md:flex items-center gap-1">
+              {NAV.map(({ href, label, match }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  aria-current={match(path) ? 'page' : undefined}
+                  className={`px-4 py-2 rounded-full text-sm font-medium no-underline transition-colors ${
+                    match(path)
+                      ? 'bg-[var(--bg-card)] text-[var(--text-primary)]'
+                      : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  {label}
+                </Link>
+              ))}
+            </nav>
+            <NavSearch />
+          </div>
 
           <div className="flex items-center gap-2 justify-self-end">
             <NetworkMenu />

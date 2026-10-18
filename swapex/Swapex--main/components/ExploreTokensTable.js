@@ -12,10 +12,12 @@ const COLUMNS = [
 
 /**
  * Sortable, searchable token table fed by indexer /tokens. Pure presentation:
- * the page owns fetching and the loading/error states.
+ * the page owns fetching and the loading/error states. `initialQuery` prefills
+ * the filter (e.g. /explore?q= from a nav-search fallback); the page remounts
+ * this component via a key when the URL query changes.
  */
-export default function ExploreTokensTable({ tokens, error = false }) {
-  const [query, setQuery] = useState('')
+export default function ExploreTokensTable({ tokens, error = false, initialQuery = '' }) {
+  const [query, setQuery] = useState(initialQuery)
   const [sort, setSort] = useState({ key: 'symbol', dir: 'asc' })
 
   const rows = useMemo(() => {

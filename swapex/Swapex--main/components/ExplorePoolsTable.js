@@ -17,21 +17,30 @@ function pairLabel(pool) {
   return `${pool.token0.symbol} / ${pool.token1.symbol}`
 }
 
+/** `weth/tusdc` and `WETH / tUSDC` compare equal: ignore case and separators. */
+function normalize(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 /**
  * Sortable, searchable pool table fed by indexer /pools. Pure presentation:
- * the page owns fetching and the loading/error states.
+ * the page owns fetching and the loading/error states. `initialQuery` prefills
+ * the filter (e.g. /explore?q= from a nav-search fallback); the page remounts
+ * this component via a key when the URL query changes.
  */
-export default function ExplorePoolsTable({ pools, error = false }) {
-  const [query, setQuery] = useState('')
+export default function ExplorePoolsTable({ pools, error = false, initialQuery = '' }) {
+  const [query, setQuery] = useState(initialQuery)
   const [sort, setSort] = useState({ key: 'tvlUsd', dir: 'desc' })
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase()
     let list = pools
     if (q) {
+      const nq = normalize(q)
       list = list.filter(
         (p) =>
           pairLabel(p).toLowerCase().includes(q) ||
+          (nq && normalize(pairLabel(p)).includes(nq)) ||
           p.address.toLowerCase().includes(q) ||
           p.token0.address.toLowerCase().includes(q) ||
           p.token1.address.toLowerCase().includes(q)
