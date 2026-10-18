@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "vercel-build": "cd ../../swapex/Swapex--main && npm ci && npm run build && rm -rf ../../apps/web/.next && cp -R .next ../../apps/web/.next",
+    "vercel-build": "cd ../../swapex/Swapex--main && npm ci --include=dev && npm run build && rm -rf ../../apps/web/.next && cp -R .next ../../apps/web/.next",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
