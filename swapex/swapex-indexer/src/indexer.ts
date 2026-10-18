@@ -1,7 +1,18 @@
 import type { ChainClient } from './chain'
 import type { Manifest } from './deployment'
 import { decodeLogs } from './decode'
-import { getCursor, setCursor, insertEvents, insertPool, poolAddresses, type Db, type StoredEvent } from './db'
+import {
+  getCursor,
+  setCursor,
+  insertEvents,
+  insertPool,
+  poolAddresses,
+  recordBlock,
+  pruneBlocksBefore,
+  type Db,
+  type StoredEvent,
+} from './db'
+import { checkAndRollback } from './reorg'
 
 /** Max blocks per pass. Keeps RPC responses bounded on busy chains. */
 export const BATCH_SIZE = 500
@@ -11,20 +22,30 @@ export interface IndexResult {
   to: number
   head: number
   events: number
+  reorg: boolean
 }
 
+type IndexClient = Pick<ChainClient, 'getBlockNumber' | 'getLogs' | 'getBlock'>
+
 /**
- * One indexing pass: from cursor+1 (or the manifest's deployment block) up to head,
- * capped at BATCH_SIZE. Addresses = factory + position manager + every pool seen so
- * far; a PoolCreated inside the range triggers an extra fetch for the new pool so
- * same-range pool events are not missed. Events, pools and the cursor are committed
- * in one SQLite transaction, so a crash mid-pass cannot leave a half-applied range.
+ * One indexing pass.
+ * 1. Reorg check: stored hashes in the unfinalized window are compared against the
+ *    chain; a mismatch rolls events/pools/cursor back to the fork point.
+ * 2. Index forward from cursor+1 (or the manifest's deployment block), capped at
+ *    BATCH_SIZE. Addresses = factory + position manager + every pool seen so far; a
+ *    PoolCreated inside the range triggers an extra fetch for the new pool so
+ *    same-range pool events are not missed.
+ * 3. Store block hashes for the last `reorgDepth` blocks so the next pass can
+ *    detect a reorg, and commit everything in one SQLite transaction per step.
  */
 export async function runOnce(
-  client: Pick<ChainClient, 'getBlockNumber' | 'getLogs'>,
+  client: IndexClient,
   db: Db,
-  manifest: Manifest
+  manifest: Manifest,
+  reorgDepth = 12
 ): Promise<IndexResult | null> {
+  const reorg = await checkAndRollback(client, db)
+
   const head = Number(await client.getBlockNumber())
   const last = getCursor(db)
   const from = last != null ? last + 1 : manifest.blockNumber
@@ -57,6 +78,16 @@ export async function runOnce(
     events = events.concat(decodeLogs(await fetchLogs(newPools)))
   }
 
+  // Hashes for the unfinalized window only (bounded getBlock calls per pass).
+  const windowFrom = Math.max(from, to - reorgDepth + 1)
+  const blockHashes = new Map<number, { hash: string; parentHash: string }>()
+  for (let n = windowFrom; n <= to; n++) {
+    const block = await client.getBlock({ blockNumber: BigInt(n) })
+    if (block?.hash) {
+      blockHashes.set(n, { hash: block.hash, parentHash: block.parentHash ?? '0x' })
+    }
+  }
+
   const store = db.transaction((batch: StoredEvent[]) => {
     insertEvents(db, batch)
     for (const e of batch) {
@@ -77,9 +108,13 @@ export async function runOnce(
         createdBlock: e.blockNumber,
       })
     }
+    for (const [number, { hash, parentHash }] of blockHashes) {
+      recordBlock(db, { number, hash, parentHash })
+    }
+    pruneBlocksBefore(db, Math.max(0, to - reorgDepth + 1))
     setCursor(db, to)
   })
   store(events)
 
-  return { from, to, head, events: events.length }
+  return { from, to, head, events: events.length, reorg: reorg.rolledBackTo != null }
 }

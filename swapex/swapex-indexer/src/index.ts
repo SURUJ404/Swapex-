@@ -16,7 +16,7 @@ console.log(
 async function loop(): Promise<void> {
   for (;;) {
     try {
-      const result = await runOnce(client, db, manifest)
+      const result = await runOnce(client, db, manifest, config.REORG_DEPTH)
       if (result) {
         console.log(`indexed blocks ${result.from}..${result.to} (head ${result.head}, ${result.events} events)`)
       }

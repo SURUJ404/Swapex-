@@ -64,6 +64,10 @@ function stubClient(logs: Log[], head: number) {
           l.blockNumber! <= toBlock
       )
     },
+    getBlock: async ({ blockNumber }: { blockNumber: bigint }) => ({
+      hash: '0x' + Number(blockNumber).toString(16).padStart(64, 'b'),
+      parentHash: '0x' + '00'.repeat(32),
+    }),
   }
 }
 
@@ -82,7 +86,7 @@ describe('runOnce', () => {
     )
     const client = stubClient([created], 10)
     const r = await runOnce(client as never, db, MANIFEST)
-    expect(r).toEqual({ from: 0, to: 10, head: 10, events: 1 })
+    expect(r).toEqual({ from: 0, to: 10, head: 10, events: 1, reorg: false })
     expect(getCursor(db)).toBe(10)
     const pools = db.prepare('SELECT address FROM pools').all() as { address: string }[]
     expect(pools[0]!.address).toBe(POOL.toLowerCase())
@@ -113,7 +117,7 @@ describe('runOnce', () => {
       7
     )
     const r = await runOnce(stubClient([swap], 8) as never, db, MANIFEST)
-    expect(r).toEqual({ from: 6, to: 8, head: 8, events: 1 })
+    expect(r).toEqual({ from: 6, to: 8, head: 8, events: 1, reorg: false })
     const events = db.prepare('SELECT event FROM events').all() as { event: string }[]
     expect(events.map((e) => e.event).sort()).toEqual(['PoolCreated', 'Swap'])
   })

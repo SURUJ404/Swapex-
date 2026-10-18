@@ -44,6 +44,11 @@ export function openDb(path: string): Db {
       tick_spacing INTEGER NOT NULL,
       created_block INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS blocks (
+      number INTEGER PRIMARY KEY,
+      hash TEXT NOT NULL,
+      parent_hash TEXT NOT NULL
+    );
   `)
   return db
 }
@@ -93,4 +98,35 @@ export function poolAddresses(db: Db): string[] {
 export function deleteEventsAfter(db: Db, block: number): void {
   db.prepare('DELETE FROM events WHERE block_number > ?').run(block)
   db.prepare('DELETE FROM pools WHERE created_block > ?').run(block)
+  deleteBlocksAfter(db, block)
+}
+
+export interface StoredBlock {
+  number: number
+  hash: string
+  parentHash: string
+}
+
+/** Remember a block's hash (within the unfinalized window) for later reorg checks. */
+export function recordBlock(db: Db, block: StoredBlock): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO blocks (number, hash, parent_hash) VALUES (?, ?, ?)`
+  ).run(block.number, block.hash.toLowerCase(), block.parentHash.toLowerCase())
+}
+
+/** Stored block hashes, newest first. */
+export function recentBlocksDesc(db: Db): StoredBlock[] {
+  const rows = db
+    .prepare('SELECT number, hash, parent_hash FROM blocks ORDER BY number DESC')
+    .all() as { number: number; hash: string; parent_hash: string }[]
+  return rows.map((r) => ({ number: r.number, hash: r.hash, parentHash: r.parent_hash }))
+}
+
+export function deleteBlocksAfter(db: Db, block: number): void {
+  db.prepare('DELETE FROM blocks WHERE number > ?').run(block)
+}
+
+/** Drop block hashes older than `before` (the window is all reorg checks need). */
+export function pruneBlocksBefore(db: Db, before: number): void {
+  db.prepare('DELETE FROM blocks WHERE number < ?').run(before)
 }
