@@ -69,12 +69,20 @@ function SwapForm() {
   // Quote: debounced, and results from superseded requests are discarded.
   useEffect(() => {
     if (!library || !amountIn || sameToken) {
-      setRoute(null)
-      setQuoting(false)
+      Promise.resolve()
+        .then(() => {
+          setRoute(null)
+          setQuoting(false)
+        })
+        .catch(() => {})
       return
     }
     let cancelled = false
-    setQuoting(true)
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setQuoting(true)
+      })
+      .catch(() => {})
     const timer = setTimeout(async () => {
       try {
         const best = await findBestRoute(library, inputToken, outputToken, amountIn)

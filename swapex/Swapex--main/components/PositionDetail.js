@@ -29,6 +29,15 @@ function bnToNumber(bn) {
   return Number(BigNumber.from(bn).toString())
 }
 
+function Row({ k, v }) {
+  return (
+    <div className="flex justify-between text-sm py-1">
+      <span className="text-[var(--text-tertiary)]">{k}</span>
+      <span className="font-mono text-[var(--text-primary)]">{v}</span>
+    </div>
+  )
+}
+
 function Detail({ tokenId }) {
   const { account, library } = useWeb3()
   const { run, pending } = useTransact()
@@ -53,7 +62,9 @@ function Detail({ tokenId }) {
   }, [library, tokenId])
 
   useEffect(() => {
-    refetch()
+    Promise.resolve()
+      .then(() => refetch())
+      .catch(() => {})
   }, [refetch])
 
   const t0 = pos?.token0
@@ -170,13 +181,6 @@ function Detail({ tokenId }) {
   const closed = pos.liquidity.isZero()
   const owed0 = pos.tokensOwed0
   const owed1 = pos.tokensOwed1
-
-  const Row = ({ k, v }) => (
-    <div className="flex justify-between text-sm py-1">
-      <span className="text-[var(--text-tertiary)]">{k}</span>
-      <span className="font-mono text-[var(--text-primary)]">{v}</span>
-    </div>
-  )
 
   return (
     <div className="max-w-xl mx-auto space-y-4">

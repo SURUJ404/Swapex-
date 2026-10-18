@@ -27,8 +27,13 @@ export default function useAllowance(token, spender) {
   }, [account, library, address, spender, wrongNetwork])
 
   useEffect(() => {
-    setAllowance(null)
-    refetch()
+    // deferred so the reset and the fetch state updates land in the async continuation
+    Promise.resolve()
+      .then(() => {
+        setAllowance(null)
+        return refetch()
+      })
+      .catch(() => {})
   }, [refetch])
 
   /** True only when we know the allowance and it is below `amount`. */

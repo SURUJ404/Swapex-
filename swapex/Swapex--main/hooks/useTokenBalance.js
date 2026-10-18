@@ -28,8 +28,16 @@ export default function useTokenBalance(token) {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    refetch().finally(() => !cancelled && setLoading(false))
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return undefined
+        setLoading(true)
+        return refetch()
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
     if (!library) return () => { cancelled = true }
     const onBlock = () => refetch()
     library.on('block', onBlock)

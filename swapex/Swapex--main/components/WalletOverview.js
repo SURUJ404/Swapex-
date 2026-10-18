@@ -10,7 +10,9 @@ export default function WalletOverview() {
 
   useEffect(() => {
     if (!account || !library) {
-      setTokenBalances({})
+      Promise.resolve()
+        .then(() => setTokenBalances({}))
+        .catch(() => {})
       return
     }
     let stale = false

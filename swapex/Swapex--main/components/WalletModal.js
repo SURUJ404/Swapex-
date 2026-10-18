@@ -1,6 +1,6 @@
 import React from 'react'
 import { useWeb3React } from '@web3-react/core'
-import { injected, walletconnect, walletlink } from '../context/Web3Context'
+import { injected, walletlink } from '../context/Web3Context'
 
 const wallets = [
   {
@@ -10,14 +10,6 @@ const wallets = [
     icon: '/images/wallets/metamask.png',
     connector: injected,
     color: '#E8831D',
-  },
-  {
-    id: 'walletconnect',
-    name: 'WalletConnect',
-    description: 'Connect to Trust Wallet, Rainbow and more',
-    icon: '/images/wallets/walletconnect.svg',
-    connector: walletconnect,
-    color: '#4196FC',
   },
   {
     id: 'walletlink',

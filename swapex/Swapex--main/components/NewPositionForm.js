@@ -74,7 +74,11 @@ function Form() {
   useEffect(() => {
     if (!library || sameToken) return
     let cancelled = false
-    setPool({ loading: true, address: null, sqrtPriceX96: null })
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setPool({ loading: true, address: null, sqrtPriceX96: null })
+      })
+      .catch(() => {})
     ;(async () => {
       try {
         const factory = new Contract(DEPLOYMENT.factory, factoryAbi, library)
@@ -134,21 +138,25 @@ function Form() {
   // ---- the other amount follows from the one the user typed
   const [lastEdited, setLastEdited] = useState('A')
   useEffect(() => {
-    if (!rangeReady || !startSqrtX96) return
-    const typed = lastEdited === 'A' ? tokenA : tokenB
-    const raw = parseAmount(lastEdited === 'A' ? amountA : amountB, typed.decimals)
-    const set = lastEdited === 'A' ? setAmountB : setAmountA
-    const other = lastEdited === 'A' ? tokenB : tokenA
-    if (!raw) return set('')
-    const typedIsToken0 = lastEdited === 'A' ? aIsToken0 : !aIsToken0
-    const r = amountsForDeposit(Number(startSqrtX96) / 2 ** 96, tickLower, tickUpper, {
-      token: typedIsToken0 ? 0 : 1,
-      amount: Number(raw.toString()),
-    })
-    if (!r) return set('')
-    const otherRaw = typedIsToken0 ? r.amount1 : r.amount0
-    set(otherRaw > 0 ? formatAmount(BigNumber.from(toIntegerString(otherRaw)), other.decimals, other.decimals) : '')
-  }, [lastEdited, amountA, amountB, rangeReady, startSqrtX96, tickLower, tickUpper, aIsToken0, tokenA, tokenB]) // eslint-disable-line react-hooks/exhaustive-deps
+    Promise.resolve()
+      .then(() => {
+        if (!rangeReady || !startSqrtX96) return
+        const typed = lastEdited === 'A' ? tokenA : tokenB
+        const raw = parseAmount(lastEdited === 'A' ? amountA : amountB, typed.decimals)
+        const set = lastEdited === 'A' ? setAmountB : setAmountA
+        const other = lastEdited === 'A' ? tokenB : tokenA
+        if (!raw) return set('')
+        const typedIsToken0 = lastEdited === 'A' ? aIsToken0 : !aIsToken0
+        const r = amountsForDeposit(Number(startSqrtX96) / 2 ** 96, tickLower, tickUpper, {
+          token: typedIsToken0 ? 0 : 1,
+          amount: Number(raw.toString()),
+        })
+        if (!r) return set('')
+        const otherRaw = typedIsToken0 ? r.amount1 : r.amount0
+        set(otherRaw > 0 ? formatAmount(BigNumber.from(toIntegerString(otherRaw)), other.decimals, other.decimals) : '')
+      })
+      .catch(() => {})
+  }, [lastEdited, amountA, amountB, rangeReady, startSqrtX96, tickLower, tickUpper, aIsToken0, tokenA, tokenB])
 
   const rawA = parseAmount(amountA, tokenA.decimals)
   const rawB = parseAmount(amountB, tokenB.decimals)

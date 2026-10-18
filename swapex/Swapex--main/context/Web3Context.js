@@ -1,17 +1,11 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { Web3ReactProvider, useWeb3React, createWeb3ReactRoot } from '@web3-react/core'
 import { InjectedConnector } from '@web3-react/injected-connector'
-import { WalletConnectConnector } from '@web3-react/walletconnect-connector'
 import { WalletLinkConnector } from '@web3-react/walletlink-connector'
 import { ethers } from 'ethers'
 import { REQUIRED_CHAIN_ID, CHAINS } from '../lib/config'
 
 const injected = new InjectedConnector({ supportedChainIds: [1, 3, 4, 5, 42] })
-
-const walletconnect = new WalletConnectConnector({
-  rpc: { 1: 'https://mainnet.infura.io/v3/' },
-  qrcode: true,
-})
 
 const walletlink = new WalletLinkConnector({
   url: 'https://mainnet.infura.io/v3/',
@@ -137,4 +131,4 @@ function useWeb3() {
   return context
 }
 
-export { Provider, useWeb3, injected, walletconnect, walletlink, getLibrary }
+export { Provider, useWeb3, injected, walletlink, getLibrary }

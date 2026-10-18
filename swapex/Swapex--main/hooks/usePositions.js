@@ -80,7 +80,9 @@ export default function usePositions() {
   }, [account, library, wrongNetwork])
 
   useEffect(() => {
-    refetch()
+    Promise.resolve()
+      .then(() => refetch())
+      .catch(() => {})
   }, [refetch])
 
   return { positions, loading, error, refetch }
