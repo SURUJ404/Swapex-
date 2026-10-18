@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/router'
-import { BigNumber, Contract } from 'ethers'
+import { BigNumber } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import positionManagerAbi from '../lib/abi/SwapexPositionManager.json'
-import factoryAbi from '../lib/abi/SwapexFactory.json'
-import poolAbi from '../lib/abi/SwapexPool.json'
+import { getPool, slot0 } from '../lib/contracts/factory'
+import {
+  multicall, encodeMint, encodeRefundETH, encodeCreateAndInitializePoolIfNecessary,
+} from '../lib/contracts/positionManager'
 import { TOKENS } from '../lib/tokens'
 import { DEPLOYMENT, FEE_TIERS, DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES } from '../lib/config'
 import { parseAmount, formatAmount, minAfterSlippage, deadlineFromNow } from '../lib/amounts'
@@ -81,11 +82,10 @@ function Form() {
       .catch(() => {})
     ;(async () => {
       try {
-        const factory = new Contract(DEPLOYMENT.factory, factoryAbi, library)
-        const address = await factory.getPool(addrA, addrB, fee)
+        const address = await getPool(library, addrA, addrB, fee)
         if (address === ZERO) return !cancelled && setPool({ loading: false, address: null, sqrtPriceX96: null })
-        const slot0 = await new Contract(address, poolAbi, library).slot0()
-        if (!cancelled) setPool({ loading: false, address, sqrtPriceX96: slot0.sqrtPriceX96.toString() })
+        const s0 = await slot0(library, address)
+        if (!cancelled) setPool({ loading: false, address, sqrtPriceX96: s0.sqrtPriceX96.toString() })
       } catch {
         if (!cancelled) setPool({ loading: false, address: null, sqrtPriceX96: null })
       }
@@ -169,17 +169,16 @@ function Form() {
 
   const submit = async () => {
     const signer = library.getSigner()
-    const pm = new Contract(DEPLOYMENT.positionManager, positionManagerAbi, signer)
     const account = await signer.getAddress()
     const [d0, d1] = aIsToken0 ? [rawA || BigNumber.from(0), rawB || BigNumber.from(0)] : [rawB || BigNumber.from(0), rawA || BigNumber.from(0)]
     const t0 = toPathAddress(token0)
     const t1 = toPathAddress(token1)
     const calls = []
     if (!poolExists) {
-      calls.push(pm.interface.encodeFunctionData('createAndInitializePoolIfNecessary', [t0, t1, fee, startSqrtX96]))
+      calls.push(encodeCreateAndInitializePoolIfNecessary(t0, t1, fee, startSqrtX96))
     }
     calls.push(
-      pm.interface.encodeFunctionData('mint', [{
+      encodeMint({
         token0: t0,
         token1: t1,
         fee,
@@ -191,16 +190,16 @@ function Form() {
         amount1Min: minAfterSlippage(d1, slippageBps),
         recipient: account,
         deadline: deadlineFromNow(deadlineMin),
-      }])
+      })
     )
     // native ETH is wrapped by the contract from msg.value; whatever it does not use comes back
     const ethAmount = tokenA.address === 'NATIVE' ? rawA : tokenB.address === 'NATIVE' ? rawB : null
-    if (ethAmount) calls.push(pm.interface.encodeFunctionData('refundETH', []))
+    if (ethAmount) calls.push(encodeRefundETH())
 
     await run({
       label: `Add liquidity ${tokenA.symbol}/${tokenB.symbol}`,
       successMessage: 'Position created',
-      send: () => pm.multicall(calls, ethAmount ? { value: ethAmount } : {}),
+      send: () => multicall(signer, calls, ethAmount ? { value: ethAmount } : {}),
       onSuccess: () => router.push('/pool'),
     })
   }

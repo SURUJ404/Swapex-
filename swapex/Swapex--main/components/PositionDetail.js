@@ -1,9 +1,20 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
-import { BigNumber, Contract } from 'ethers'
+import { BigNumber } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import positionManagerAbi from '../lib/abi/SwapexPositionManager.json'
+import {
+  collect as pmCollect,
+  increaseLiquidity as pmIncreaseLiquidity,
+  burn as pmBurn,
+  multicall as pmMulticall,
+  encodeDecreaseLiquidity,
+  encodeCollect,
+  encodeUnwrapWETH9,
+  encodeSweepToken,
+  ADDRESS_THIS,
+  MAX_UINT128,
+} from '../lib/contracts/positionManager'
 import { DEPLOYMENT, DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES, WETH_ADDRESS } from '../lib/config'
 import { formatAmount, minAfterSlippage, deadlineFromNow, parseAmount } from '../lib/amounts'
 import { amountsForLiquidity, amountsForDeposit, toIntegerString } from '../lib/liquidity'
@@ -17,9 +28,6 @@ import NetworkGuard from './NetworkGuard'
 import SlippageSettings from './SlippageSettings'
 import DataUnavailable from './DataUnavailable'
 import { RangeBadge } from './PositionsList'
-
-const ADDRESS_THIS = '0x0000000000000000000000000000000000000002'
-const MAX_UINT128 = BigNumber.from(2).pow(128).sub(1)
 
 export default function PositionDetail({ tokenId }) {
   if (!DEPLOYMENT) return <DataUnavailable title="Position" needs="Swapex contracts deployed on this network" />
@@ -93,40 +101,38 @@ function Detail({ tokenId }) {
 
   const hasWeth = pos && WETH_ADDRESS && [pos.token0.address, pos.token1.address].some((a) => a.toLowerCase() === WETH_ADDRESS.toLowerCase())
 
-  const pm = () => new Contract(DEPLOYMENT.positionManager, positionManagerAbi, library.getSigner())
-
   const collectOnly = () =>
     run({
       label: `Collect fees #${pos.id}`,
       successMessage: 'Fees collected',
-      send: () => pm().collect({ tokenId: pos.id, recipient: account, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }),
+      send: () => pmCollect(library.getSigner(), { tokenId: pos.id, recipient: account, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }),
       onSuccess: refetch,
     })
 
   const remove = () => {
-    const c = pm()
+    const signer = library.getSigner()
     const calls = [
-      c.interface.encodeFunctionData('decreaseLiquidity', [{
+      encodeDecreaseLiquidity({
         tokenId: pos.id,
         liquidity: removeLiquidity,
         amount0Min: minAfterSlippage(BigNumber.from(toIntegerString(removeEst.amount0)), slippageBps),
         amount1Min: minAfterSlippage(BigNumber.from(toIntegerString(removeEst.amount1)), slippageBps),
         deadline: deadlineFromNow(deadlineMin),
-      }]),
+      }),
     ]
     if (receiveEth && hasWeth) {
       // collect into the contract, then turn WETH into ETH and send the other token on
-      calls.push(c.interface.encodeFunctionData('collect', [{ tokenId: pos.id, recipient: ADDRESS_THIS, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }]))
-      calls.push(c.interface.encodeFunctionData('unwrapWETH9', [0, account]))
+      calls.push(encodeCollect({ tokenId: pos.id, recipient: ADDRESS_THIS, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }))
+      calls.push(encodeUnwrapWETH9(0, account))
       const other = pos.token0.address.toLowerCase() === WETH_ADDRESS.toLowerCase() ? pos.token1.address : pos.token0.address
-      calls.push(c.interface.encodeFunctionData('sweepToken', [other, 0, account]))
+      calls.push(encodeSweepToken(other, 0, account))
     } else {
-      calls.push(c.interface.encodeFunctionData('collect', [{ tokenId: pos.id, recipient: account, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }]))
+      calls.push(encodeCollect({ tokenId: pos.id, recipient: account, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }))
     }
     return run({
       label: `Remove ${percent}% of #${pos.id}`,
       successMessage: 'Liquidity removed',
-      send: () => c.multicall(calls),
+      send: () => pmMulticall(signer, calls),
       onSuccess: refetch,
     })
   }
@@ -144,13 +150,12 @@ function Detail({ tokenId }) {
   const mustApprove0 = raw0 && allow0.needsApproval(raw0)
   const mustApprove1 = need1.gt(0) && allow1.needsApproval(need1)
 
-  const add = () => {
-    const c = pm()
-    return run({
+  const add = () =>
+    run({
       label: `Add liquidity to #${pos.id}`,
       successMessage: 'Liquidity added',
       send: () =>
-        c.increaseLiquidity({
+        pmIncreaseLiquidity(library.getSigner(), {
           tokenId: pos.id,
           amount0Desired: raw0,
           amount1Desired: need1,
@@ -165,10 +170,9 @@ function Detail({ tokenId }) {
         bal1.refetch && bal1.refetch()
       },
     })
-  }
 
   const burn = () =>
-    run({ label: `Close position #${pos.id}`, successMessage: 'Position closed', send: () => pm().burn(pos.id), onSuccess: () => router.push('/pool') })
+    run({ label: `Close position #${pos.id}`, successMessage: 'Position closed', send: () => pmBurn(library.getSigner(), pos.id), onSuccess: () => router.push('/pool') })
 
   if (error) {
     return <DataUnavailable title="Position not found" needs="a position you own on this network" />
