@@ -1,11 +1,10 @@
 // Finding the best swap route with the on-chain quoter, and pricing its impact.
 // The quoter runs the real swap against the real pools and reverts, so quotes are exact: what it returns
 // is what the router will deliver if the pools do not change before the transaction lands.
-import { Contract, BigNumber } from 'ethers'
-import quoterAbi from './abi/SwapexQuoter.json'
-import factoryAbi from './abi/SwapexFactory.json'
-import poolAbi from './abi/SwapexPool.json'
-import { DEPLOYMENT, WETH_ADDRESS, FEE_TIERS } from './config'
+import { BigNumber } from 'ethers'
+import { quoteExactInput } from './contracts/quoter'
+import { getPool, slot0 } from './contracts/factory'
+import { WETH_ADDRESS, FEE_TIERS } from './config'
 import { encodePath } from './path'
 
 const ZERO = '0x0000000000000000000000000000000000000000'
@@ -44,12 +43,10 @@ export function pickBest(quotes) {
 
 /** Quote one route. Throws if a pool is missing or cannot fill the whole trade. */
 export async function quoteRoute(library, route, amountIn) {
-  const quoter = new Contract(DEPLOYMENT.quoter, quoterAbi, library)
   const path = encodePath(route.tokens, route.fees)
-  const r = await quoter.callStatic.quoteExactInput(path, amountIn)
-  const amountOut = BigNumber.from(r.amountOut)
+  const { amountOut, gasEstimate } = await quoteExactInput(library, path, amountIn)
   if (amountOut.lte(0)) throw new Error('no output')
-  return { ...route, path, amountOut, gasEstimate: BigNumber.from(r.gasEstimate) }
+  return { ...route, path, amountOut, gasEstimate }
 }
 
 /** Mid price of tokenIn in tokenOut (raw units) from a pool's sqrt price. Number precision is fine for display. */
@@ -83,15 +80,14 @@ export function routeImpact(amountIn, amountOut, hops, decimalsIn, decimalsOut) 
 }
 
 async function hopsFor(library, route) {
-  const factory = new Contract(DEPLOYMENT.factory, factoryAbi, library)
   return Promise.all(
     route.fees.map(async (fee, i) => {
       const tokenIn = route.tokens[i]
       const tokenOut = route.tokens[i + 1]
-      const pool = await factory.getPool(tokenIn, tokenOut, fee)
+      const pool = await getPool(library, tokenIn, tokenOut, fee)
       if (pool === ZERO) return null
-      const slot0 = await new Contract(pool, poolAbi, library).slot0()
-      return { mid: hopMidPrice(slot0.sqrtPriceX96, tokenIn, tokenOut), fee }
+      const s0 = await slot0(library, pool)
+      return { mid: hopMidPrice(s0.sqrtPriceX96, tokenIn, tokenOut), fee }
     })
   )
 }

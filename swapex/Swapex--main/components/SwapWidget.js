@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { Contract, utils } from 'ethers'
+import { utils } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
-import routerAbi from '../lib/abi/SwapexRouter.json'
+import { exactInput, multicall, encodeExactInput, encodeUnwrapWETH9, ADDRESS_THIS } from '../lib/contracts/router'
 import { TOKENS, findToken } from '../lib/tokens'
 import DataUnavailable from './DataUnavailable'
 import TokenSelectModal from './TokenSelectModal'
@@ -21,8 +21,6 @@ import {
 import { DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES, HIGH_PRICE_IMPACT, DEPLOYMENT } from '../lib/config'
 
 const ROUTER_ADDRESS = DEPLOYMENT?.router
-// sentinel the router understands as "keep the output in the router" so it can be unwrapped to ETH
-const ADDRESS_THIS = '0x0000000000000000000000000000000000000002'
 
 const GAS_RESERVE = utils.parseEther('0.01') // kept back by MAX when paying with ETH
 const QUOTE_REFRESH_MS = 15000
@@ -110,10 +108,10 @@ function SwapForm() {
 
   const swap = async () => {
     if (!account || !library || !amountIn || !route) return
-    const router = new Contract(ROUTER_ADDRESS, routerAbi, library.getSigner())
+    const signer = library.getSigner()
     const deadline = deadlineFromNow(deadlineMin)
     const min = minReceived
-    const exactInput = (recipient) => ({
+    const params = (recipient) => ({
       path: route.path,
       recipient,
       deadline,
@@ -126,12 +124,10 @@ function SwapForm() {
       send: () => {
         if (outputToken.address === 'NATIVE') {
           // swap into the router as WETH, then unwrap to ETH for the user, in one transaction
-          const swapCall = router.interface.encodeFunctionData('exactInput', [exactInput(ADDRESS_THIS)])
-          const unwrapCall = router.interface.encodeFunctionData('unwrapWETH9', [min, account])
-          return router.multicall([swapCall, unwrapCall])
+          return multicall(signer, [encodeExactInput(params(ADDRESS_THIS)), encodeUnwrapWETH9(min, account)])
         }
         const overrides = inputToken.address === 'NATIVE' ? { value: amountIn } : {}
-        return router.exactInput(exactInput(account), overrides)
+        return exactInput(signer, params(account), overrides)
       },
       onSuccess: () => {
         setInputAmount('')
