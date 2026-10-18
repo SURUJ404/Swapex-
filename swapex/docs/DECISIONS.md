@@ -63,3 +63,18 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   refreshed the "Honest status" section of `docs/UI_PARITY.md`. All plan-literal;
   reversal is a plain `git revert` of the S4 commit.
 
+## 2026-10-18 — Add zod to the web app for indexer response validation (S20)
+
+- **Decision:** Installed `zod` (runtime dep) and added `lib/indexerApi.js`, which
+  validates every indexer HTTP response before it reaches the UI. Base URL from
+  `NEXT_PUBLIC_INDEXER_URL`; unset → `null` → honest "indexer not connected" state.
+  `lib/features.js` exposes sync flags (`explore` needs deployment + indexer URL,
+  `portfolio` needs deployment, `limit` reserved/false).
+- **Rationale:** The plan (S20) calls for zod in the app for this purpose —
+  the indexer returns data the UI must not trust blindly, and hand-written
+  guards for six endpoint shapes are more error-prone than a schema. It is
+  small, tree-shakeable, and does not affect the stack constraint (ethers v5,
+  web3-react v6, pages router all unchanged).
+- **Reversal:** Remove the dep and the two lib files; the UI layers that will
+  consume them (S21/S22) fall back to "indexer not connected".
+
