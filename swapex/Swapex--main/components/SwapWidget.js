@@ -5,6 +5,7 @@ import { exactInput, multicall, encodeExactInput, encodeUnwrapWETH9, ADDRESS_THI
 import { TOKENS, findToken } from '../lib/tokens'
 import DataUnavailable from './DataUnavailable'
 import TokenSelectModal from './TokenSelectModal'
+import ConfirmSwapModal from './ConfirmSwapModal'
 import NetworkGuard from './NetworkGuard'
 import SlippageSettings from './SlippageSettings'
 import useTokenBalance from '../hooks/useTokenBalance'
@@ -47,6 +48,8 @@ function SwapForm() {
   const [quoteTick, setQuoteTick] = useState(0)
   const [showInputModal, setShowInputModal] = useState(false)
   const [showOutputModal, setShowOutputModal] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
+  const [gasPrice, setGasPrice] = useState(null)
 
   const { balance: inputBalance, refetch: refetchIn } = useTokenBalance(inputToken)
   const { balance: outputBalance, refetch: refetchOut } = useTokenBalance(outputToken)
@@ -107,7 +110,7 @@ function SwapForm() {
     approve(inputToken, ROUTER_ADDRESS, amountIn, allowance, refetchAllowance)
 
   const swap = async () => {
-    if (!account || !library || !amountIn || !route) return
+    if (!account || !library || !amountIn || !route) return null
     const signer = library.getSigner()
     const deadline = deadlineFromNow(deadlineMin)
     const min = minReceived
@@ -118,7 +121,7 @@ function SwapForm() {
       amountIn,
       amountOutMinimum: min,
     })
-    await run({
+    return run({
       label: `Swap ${inputToken.symbol} → ${outputToken.symbol}`,
       successMessage: `Swapped ${formatAmount(amountIn, inputToken.decimals)} ${inputToken.symbol} for ${formatAmount(amountOut, outputToken.decimals)} ${outputToken.symbol}`,
       send: () => {
@@ -137,6 +140,17 @@ function SwapForm() {
         refetchAllowance()
       },
     })
+  }
+
+  const openConfirm = () => {
+    if (!route) return
+    setShowConfirm(true)
+    if (library && route.gasEstimate && gasPrice == null) {
+      library
+        .getGasPrice()
+        .then(setGasPrice)
+        .catch(() => setGasPrice(null))
+    }
   }
 
   const switchTokens = () => {
@@ -293,7 +307,7 @@ function SwapForm() {
           </button>
         ) : (
           <button
-            onClick={swap}
+            onClick={openConfirm}
             disabled={swapping}
             className={`w-full py-3 rounded-xl font-semibold text-sm font-display transition-all ${
               swapping
@@ -310,6 +324,26 @@ function SwapForm() {
 
       <TokenSelectModal open={showInputModal} onClose={() => setShowInputModal(false)} onSelect={setInputToken} />
       <TokenSelectModal open={showOutputModal} onClose={() => setShowOutputModal(false)} onSelect={setOutputToken} />
+      <ConfirmSwapModal
+        open={showConfirm}
+        onClose={() => setShowConfirm(false)}
+        onConfirm={async () => {
+          const receipt = await swap()
+          if (receipt) setShowConfirm(false)
+        }}
+        pending={swapping}
+        inputToken={inputToken}
+        outputToken={outputToken}
+        amountIn={amountIn}
+        amountOut={amountOut}
+        minReceived={minReceived}
+        route={route}
+        impact={route?.impact}
+        slippageBps={slippageBps}
+        deadlineMin={deadlineMin}
+        gasEstimate={route?.gasEstimate}
+        gasPrice={gasPrice}
+      />
     </div>
   )
 }
