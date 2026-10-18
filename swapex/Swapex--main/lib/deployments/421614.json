@@ -1,0 +1,10 @@
+{
+  "chainId": 421614,
+  "note": "Not deployed yet. Run script/Deploy.s.sol and script/SeedTestnet.s.sol in swapex-contracts, then scripts/export-abis.sh.",
+  "weth9": null,
+  "factory": null,
+  "router": null,
+  "positionManager": null,
+  "quoter": null,
+  "tokens": []
+}

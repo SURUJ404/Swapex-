@@ -1,0 +1,23 @@
+# build output
+out/
+cache/
+broadcast/*/31337/
+lib/
+node_modules/
+__pycache__/
+*.pyc
+
+# secrets: never commit any of these
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.keystore
+keystore/
+.foundry/keystores/
+mnemonic*
+*.secret
+
+# local test deployments
+deployments/31337.json

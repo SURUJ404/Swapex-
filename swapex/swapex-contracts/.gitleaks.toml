@@ -1,0 +1,22 @@
+# Secret scanning rules. Extends the default ruleset and adds crypto-specific checks.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "evm-private-key-assignment"
+description = "64-hex value assigned to something that looks like a private key"
+regex = '''(?i)(private[_-]?key|priv[_-]?key|deployer[_-]?key|PRIVATE_KEY)\s*[:=]\s*["']?(0x)?[0-9a-f]{64}["']?'''
+tags = ["key", "evm"]
+
+[[rules]]
+id = "mnemonic-assignment"
+description = "BIP-39 style mnemonic assigned to a variable"
+regex = '''(?i)(mnemonic|seed[_-]?phrase)\s*[:=]\s*["'](\w+\s+){11,23}\w+["']'''
+tags = ["key", "mnemonic"]
+
+[allowlist]
+description = "Generated numeric test vectors and the lockfile are not secrets"
+paths = [
+  '''test/v3/GoldenVectors\.t\.sol''',
+  '''package-lock\.json''',
+]

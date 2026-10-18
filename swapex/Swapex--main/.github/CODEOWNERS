@@ -1,0 +1,7 @@
+# Replace @YOUR_GITHUB_USER with the real handle or team, and enable "Require review from Code Owners".
+/lib/                @YOUR_GITHUB_USER
+/context/            @YOUR_GITHUB_USER
+/constants/          @YOUR_GITHUB_USER
+/next.config.mjs     @YOUR_GITHUB_USER
+/.github/            @YOUR_GITHUB_USER
+/.gitleaks.toml      @YOUR_GITHUB_USER

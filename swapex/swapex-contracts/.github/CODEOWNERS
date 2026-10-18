@@ -1,0 +1,6 @@
+# Changes to these paths need a review from a code owner (enable "Require review from Code Owners" in branch protection).
+# Replace @YOUR_GITHUB_USER with the real handle or team.
+/src/                @YOUR_GITHUB_USER
+/script/             @YOUR_GITHUB_USER
+/.github/            @YOUR_GITHUB_USER
+/.gitleaks.toml      @YOUR_GITHUB_USER

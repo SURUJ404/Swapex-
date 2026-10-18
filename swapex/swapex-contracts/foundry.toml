@@ -1,0 +1,25 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+
+solc_version = "0.8.26"
+optimizer = true
+optimizer_runs = 800
+bytecode_hash = "none"        # keeps the pool init-code hash stable across machines
+cbor_metadata = false
+evm_version = "cancun"
+via_ir = true                 # swap() has many locals; IR pipeline avoids "stack too deep"
+
+# the scripts read and write deployments/ and nothing else
+fs_permissions = [{ access = "read-write", path = "deployments" }]
+
+[rpc_endpoints]
+sepolia = "${SEPOLIA_RPC_URL}"
+base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
+arbitrum_sepolia = "${ARBITRUM_SEPOLIA_RPC_URL}"
+
+[profile.default.fuzz]
+runs = 512
