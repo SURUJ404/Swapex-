@@ -64,6 +64,7 @@ Swapex stays Next.js. We copy the *experience*, not the code.
 
 ## Honest status
 - Contracts: compiled and tested here with Foundry (80 tests pass) and exercised end to end on a local anvil node.
-- Web app: every file parses (checked with a JS transpiler) and the path-encoding tests pass, but `npm install`
-  is blocked in this sandbox, so `npm run build`, `npm test` and a browser run have not happened. Run them first.
+- Web app: `npm ci`, `npm test` (25 pass), `npm run lint` (0 errors) and `npm run build` all pass on Node 24.
+  Wallet connection is verified by code inspection and the build; a live browser + wallet run still needs a
+  manual check against the local anvil stack (`dev.sh`).
 - Screens whose contracts or indexer do not exist yet ship disabled with a clear message.
