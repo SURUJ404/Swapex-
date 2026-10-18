@@ -59,22 +59,24 @@ export default function SendForm() {
 
       <div className="space-y-4">
         <div>
-          <label className="text-xs text-[var(--text-tertiary)] mb-1 block">Asset</label>
+          <label htmlFor="send-asset" className="text-xs text-[var(--text-tertiary)] mb-1 block">Asset</label>
           <button
+            id="send-asset"
             onClick={() => setShowModal(true)}
             className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)] text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-card)] transition-colors"
           >
             <img src={selectedToken.logo} alt={selectedToken.symbol} className="w-5 h-5 rounded-full" />
             {selectedToken.symbol}
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
             </svg>
           </button>
         </div>
 
         <div>
-          <label className="text-xs text-[var(--text-tertiary)] mb-1 block">Recipient Address</label>
+          <label htmlFor="send-recipient" className="text-xs text-[var(--text-tertiary)] mb-1 block">Recipient Address</label>
           <input
+            id="send-recipient"
             type="text"
             placeholder="0x..."
             value={recipient}
@@ -85,13 +87,14 @@ export default function SendForm() {
 
         <div>
           <div className="flex items-center justify-between mb-1">
-            <label className="text-xs text-[var(--text-tertiary)]">Amount</label>
+            <label htmlFor="send-amount" className="text-xs text-[var(--text-tertiary)]">Amount</label>
             <span className="text-xs text-[var(--text-tertiary)] font-mono">
               Balance: {formatAmount(balance, selectedToken.decimals, 4) || '0'}
             </span>
           </div>
           <div className="flex items-center gap-2">
             <input
+              id="send-amount"
               type="text"
               inputMode="decimal"
               placeholder="0.0"

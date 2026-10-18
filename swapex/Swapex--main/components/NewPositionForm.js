@@ -287,8 +287,9 @@ function Form() {
       {!sameToken && !pool.loading && !poolExists && (
         <div className="mb-5 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-4">
           <p className="text-sm text-yellow-500 mb-2">This pool does not exist yet. You will create it and set its starting price.</p>
-          <label className="text-xs text-[var(--text-tertiary)]">Starting price ({tokenB.symbol} per {tokenA.symbol})</label>
+          <label htmlFor="new-pos-start-price" className="text-xs text-[var(--text-tertiary)]">Starting price ({tokenB.symbol} per {tokenA.symbol})</label>
           <input
+            id="new-pos-start-price"
             type="text"
             inputMode="decimal"
             value={initialPrice}
@@ -318,8 +319,9 @@ function Form() {
         <div className="grid grid-cols-2 gap-2 mb-2">
           {[['Min price', minPrice, setMinPrice], ['Max price', maxPrice, setMaxPrice]].map(([name, val, set]) => (
             <div key={name} className="bg-[var(--bg-secondary)] rounded-xl p-3">
-              <label className="text-xs text-[var(--text-tertiary)]">{name}</label>
+              <label htmlFor={`new-pos-${name.toLowerCase().replace(' ', '-')}`} className="text-xs text-[var(--text-tertiary)]">{name}</label>
               <input
+                id={`new-pos-${name.toLowerCase().replace(' ', '-')}`}
                 type="text"
                 inputMode="decimal"
                 value={val}

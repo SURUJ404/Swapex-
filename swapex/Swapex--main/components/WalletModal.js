@@ -1,5 +1,7 @@
 import React from 'react'
 import { useWeb3React } from '@web3-react/core'
+import { DialogOverlay, DialogContent } from '@reach/dialog'
+import '@reach/dialog/styles.css'
 import { injected, walletlink } from '../context/Web3Context'
 
 const wallets = [
@@ -24,17 +26,15 @@ const wallets = [
 export default function WalletModal({ isOpen, onClose }) {
   const { activate } = useWeb3React()
 
-  if (!isOpen) return null
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      onClick={onClose}
+    <DialogOverlay
+      isOpen={isOpen}
+      onDismiss={onClose}
+      className="z-50"
     >
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div
-        className="relative bg-[var(--bg-card)] border border-[var(--border)] rounded-2xl p-6 w-full max-w-sm mx-4 animate-slide-up"
-        onClick={(e) => e.stopPropagation()}
+      <DialogContent
+        aria-label="Connect Wallet"
+        className="!bg-[var(--bg-card)] !border !border-[var(--border)] !rounded-2xl !p-6 !w-full !max-w-sm !m-4 animate-slide-up"
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-[var(--text-primary)]">
@@ -42,6 +42,7 @@ export default function WalletModal({ isOpen, onClose }) {
           </h2>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors text-xl leading-none"
           >
             &times;
@@ -64,7 +65,8 @@ export default function WalletModal({ isOpen, onClose }) {
               >
                 <img
                   src={wallet.icon}
-                  alt={wallet.name}
+                  alt=""
+                  aria-hidden="true"
                   className="w-6 h-6"
                   onError={(e) => {
                     e.target.style.display = 'none'
@@ -82,7 +84,7 @@ export default function WalletModal({ isOpen, onClose }) {
             </button>
           ))}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </DialogOverlay>
   )
 }

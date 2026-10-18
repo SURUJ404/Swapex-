@@ -28,6 +28,7 @@ export function ToastProvider({ children }) {
         {toasts.map((toast) => (
           <div
             key={toast.id}
+            role={toast.type === 'error' ? 'alert' : 'status'}
             className={`px-4 py-3 rounded-lg shadow-lg text-white text-sm font-display flex items-center gap-2 min-w-[280px] animate-slide-up ${
               toast.type === 'success'
                 ? 'bg-[var(--success)]'
@@ -39,6 +40,7 @@ export function ToastProvider({ children }) {
             <span className="flex-1">{toast.message}</span>
             <button
               onClick={() => removeToast(toast.id)}
+              aria-label="Dismiss notification"
               className="text-white/70 hover:text-white text-lg leading-none"
             >
               &times;

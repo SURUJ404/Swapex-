@@ -191,7 +191,9 @@ function SwapForm() {
             </button>
           </div>
           <div className="flex items-center gap-3">
+            <label htmlFor="swap-amount-in" className="sr-only">Amount to pay</label>
             <input
+              id="swap-amount-in"
               type="text"
               inputMode="decimal"
               placeholder="0.0"
@@ -206,9 +208,9 @@ function SwapForm() {
               onClick={() => setShowInputModal(true)}
               className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border)] text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
             >
-              <img src={inputToken.logo} alt={inputToken.symbol} className="w-5 h-5 rounded-full" />
+              <img src={inputToken.logo} alt="" aria-hidden="true" className="w-5 h-5 rounded-full" />
               {inputToken.symbol}
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </button>
@@ -221,7 +223,7 @@ function SwapForm() {
             aria-label="Switch tokens"
             className="w-10 h-10 rounded-full bg-[var(--bg-card)] border border-[var(--border)] flex items-center justify-center text-[var(--text-secondary)] hover:text-[var(--accent)] hover:border-[var(--accent)] transition-colors shadow-lg"
           >
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
             </svg>
           </button>
@@ -235,7 +237,9 @@ function SwapForm() {
             </span>
           </div>
           <div className="flex items-center gap-3">
+            <label htmlFor="swap-amount-out" className="sr-only">Amount to receive</label>
             <input
+              id="swap-amount-out"
               type="text"
               placeholder="0.0"
               value={amountOut ? formatAmount(amountOut, outputToken.decimals, 8) : ''}
@@ -246,9 +250,9 @@ function SwapForm() {
               onClick={() => setShowOutputModal(true)}
               className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border)] text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--bg-secondary)] transition-colors"
             >
-              <img src={outputToken.logo} alt={outputToken.symbol} className="w-5 h-5 rounded-full" />
+              <img src={outputToken.logo} alt="" aria-hidden="true" className="w-5 h-5 rounded-full" />
               {outputToken.symbol}
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </button>

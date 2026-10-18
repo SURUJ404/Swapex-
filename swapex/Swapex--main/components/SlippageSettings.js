@@ -43,7 +43,9 @@ export default function SlippageSettings({ bps, onBpsChange, deadline, onDeadlin
             {bpsToPercent(s)}%
           </button>
         ))}
+        <label htmlFor="slippage-custom" className="sr-only">Custom slippage percent</label>
         <input
+          id="slippage-custom"
           type="text"
           inputMode="decimal"
           placeholder="Custom %"
@@ -51,9 +53,10 @@ export default function SlippageSettings({ bps, onBpsChange, deadline, onDeadlin
           onChange={(e) => onCustom(e.target.value)}
           className="w-24 px-2 py-1.5 rounded-lg text-xs bg-[var(--bg-secondary)] border border-[var(--border)] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
         />
-        <label className="flex items-center gap-1 text-xs text-[var(--text-tertiary)] ml-auto">
+        <label htmlFor="slippage-deadline" className="flex items-center gap-1 text-xs text-[var(--text-tertiary)] ml-auto">
           Deadline
           <input
+            id="slippage-deadline"
             type="number"
             min="1"
             max="4320"

@@ -258,7 +258,9 @@ function Detail({ tokenId }) {
                       <span>{t0.symbol}</span>
                       <span className="font-mono">Balance: {formatAmount(bal0.balance, t0.decimals, 4) || '0'}</span>
                     </div>
+                    <label htmlFor="pos-add-amount" className="sr-only">Amount of {t0.symbol} to add</label>
                     <input
+                      id="pos-add-amount"
                       value={addAmount0}
                       onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setAddAmount0(e.target.value)}
                       placeholder="0.0"
@@ -313,7 +315,7 @@ function Detail({ tokenId }) {
               )}
               {hasWeth && (
                 <label className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
-                  <input type="checkbox" checked={receiveEth} onChange={(e) => setReceiveEth(e.target.checked)} /> Receive ETH instead of WETH
+                  <input type="checkbox" checked={receiveEth} onChange={(e) => setReceiveEth(e.target.checked)} aria-label="Receive ETH instead of WETH" /> Receive ETH instead of WETH
                 </label>
               )}
               <SlippageSettings bps={slippageBps} onBpsChange={setSlippageBps} deadline={deadlineMin} onDeadlineChange={setDeadlineMin} />
