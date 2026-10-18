@@ -40,19 +40,48 @@ function Web3Manager({ children }) {
     }
   }, [activate])
 
-  const switchNetwork = useCallback(async () => {
-    const target = CHAINS[REQUIRED_CHAIN_ID]
-    const provider = library?.provider
-    if (!provider?.request || !target) return
-    try {
-      await provider.request({
-        method: 'wallet_switchEthereumChain',
-        params: [{ chainId: target.hexId }],
-      })
-    } catch (e) {
-      console.error('switchNetwork error:', e)
-    }
-  }, [library])
+  /** Switch the wallet to any chain in CHAINS; adds the chain when the wallet does not know it. */
+  const switchTo = useCallback(
+    async (targetId) => {
+      const target = CHAINS[targetId]
+      const provider = library?.provider
+      if (!provider?.request || !target) return false
+      try {
+        await provider.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: target.hexId }],
+        })
+        return true
+      } catch (e) {
+        // 4902: chain not added to the wallet yet
+        if (e?.code === 4902 || e?.data?.originalError?.code === 4902) {
+          try {
+            await provider.request({
+              method: 'wallet_addEthereumChain',
+              params: [
+                {
+                  chainId: target.hexId,
+                  chainName: target.name,
+                  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+                  rpcUrls: target.rpc ? [target.rpc] : [],
+                  blockExplorerUrls: target.explorer ? [target.explorer] : [],
+                },
+              ],
+            })
+            return true
+          } catch (addErr) {
+            console.error('switchTo add error:', addErr)
+            return false
+          }
+        }
+        console.error('switchTo error:', e)
+        return false
+      }
+    },
+    [library]
+  )
+
+  const switchNetwork = useCallback(() => switchTo(REQUIRED_CHAIN_ID), [switchTo])
 
   const disconnectWallet = useCallback(() => {
     try {
@@ -105,6 +134,7 @@ function Web3Manager({ children }) {
         connectWallet,
         wrongNetwork,
         switchNetwork,
+        switchTo,
         walletModalOpen,
         setWalletModalOpen,
         disconnectWallet,
