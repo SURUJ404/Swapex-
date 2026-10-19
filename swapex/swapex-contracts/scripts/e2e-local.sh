@@ -8,7 +8,10 @@ ME=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 cd "$(dirname "$0")/.."
 
 if ! cast chain-id --rpc-url "$RPC" >/dev/null 2>&1; then
-  anvil --silent & ANVIL_PID=$!; trap 'kill $ANVIL_PID 2>/dev/null || true' EXIT
+  # taskkill fallback: on Windows a plain `kill` sometimes leaves the anvil process alive,
+  # and a surviving node makes the next run reuse its state (addresses then differ)
+  anvil --silent & ANVIL_PID=$!
+  trap 'kill $ANVIL_PID 2>/dev/null || MSYS2_ARG_CONV_EXCL="*" taskkill /F /PID $ANVIL_PID >/dev/null 2>&1 || true' EXIT
   for _ in $(seq 1 30); do cast chain-id --rpc-url "$RPC" >/dev/null 2>&1 && break; sleep 0.5; done
 fi
 
@@ -54,4 +57,8 @@ ETH_BEFORE=$(cast balance $ME --rpc-url "$RPC")
 cast send "$ROUTER" "multicall(bytes[])" "[$SWAP,$UNWRAP]" --private-key $KEY --rpc-url "$RPC" >/dev/null
 ETH_AFTER=$(cast balance $ME --rpc-url "$RPC")
 echo "ETH balance change (wei, includes gas): $((ETH_AFTER-ETH_BEFORE))"
+
+echo "== limit order round trip: EIP-712 sign -> 60% fill -> remainder fill"
+forge script script/E2ELimitOrder.s.sol --rpc-url "$RPC" --broadcast >/dev/null
+
 echo "OK"

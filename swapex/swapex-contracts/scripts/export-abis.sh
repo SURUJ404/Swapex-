@@ -16,8 +16,9 @@ for cand in python3 py; do
 done
 [ -n "$PYTHON" ] || { echo "Missing: python3 (or py). Install Python 3." >&2; exit 1; }
 for spec in "src/periphery/SwapexRouter.sol:SwapexRouter" "src/periphery/SwapexQuoter.sol:SwapexQuoter" \
-            "src/periphery/SwapexPositionManager.sol:SwapexPositionManager" "src/v3/SwapexFactory.sol:SwapexFactory" \
-            "src/v3/SwapexPool.sol:SwapexPool" "src/testnet/TestToken.sol:TestToken"; do
+            "src/periphery/SwapexPositionManager.sol:SwapexPositionManager" "src/periphery/SwapexLimitOrders.sol:SwapexLimitOrders" \
+            "src/v3/SwapexFactory.sol:SwapexFactory" "src/v3/SwapexPool.sol:SwapexPool" \
+            "src/testnet/TestToken.sol:TestToken"; do
   forge inspect "$spec" abi --json > "$WEB/lib/abi/${spec##*:}.json"
 done
 # manifests: merge deployments/<id>.json with deployments/<id>.seed.json when present

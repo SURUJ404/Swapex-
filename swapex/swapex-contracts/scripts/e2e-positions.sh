@@ -6,12 +6,22 @@ RPC=${RPC:-http://127.0.0.1:8545}
 KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80   # anvil account #0 (public test key)
 ME=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 cd "$(dirname "$0")/.."
-j() { python3 -c "import json;d=json.load(open('$1'));print($2)"; }
+# python3 on Linux/macOS; fall back to py (Windows). Each candidate is verified by
+# actually running it: the Windows python3 App Execution alias exists on PATH but never runs.
+PYTHON=""
+for cand in python3 py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys" >/dev/null 2>&1; then
+    PYTHON=$cand
+    break
+  fi
+done
+[ -n "$PYTHON" ] || { echo "Missing: python3 (or py). Install Python 3." >&2; exit 1; }
+j() { "$PYTHON" -c "import json;d=json.load(open('$1'));print($2)"; }
 PM=$(j deployments/31337.json "d['positionManager']"); WETH=$(j deployments/31337.json "d['weth9']")
 DAI=$(j deployments/31337.seed.json "d['tokens'][1]['address']")
 FEE=500   # a pool that does not exist yet
 
-read -r T0 T1 SQRT TL TU <<<"$(python3 - "$WETH" "$DAI" <<'PY'
+read -r T0 T1 SQRT TL TU <<<"$("$PYTHON" - "$WETH" "$DAI" <<'PY'
 import math, sys
 weth, dai = sys.argv[1], sys.argv[2]
 # 1 WETH = 3000 DAI, both 18 decimals; price is token1 per token0
@@ -42,7 +52,7 @@ echo "liquidity $LIQ"
 [ "$(cast balance $PM --rpc-url "$RPC")" = "0" ] && echo "no ETH stranded in the position manager"
 
 echo "== remove 50%: decrease + collect to contract + unwrap + sweep (receive ETH)"
-HALF=$(python3 -c "print($LIQ//2)")
+HALF=$("$PYTHON" -c "print($LIQ//2)")
 OTHER=$DAI
 DEC=$(cast calldata "decreaseLiquidity((uint256,uint128,uint256,uint256,uint256))" "($ID,$HALF,0,0,$DEADLINE)")
 MAXU=340282366920938463463374607431768211455
@@ -54,11 +64,11 @@ ETH_BEFORE=$(cast balance $ME --rpc-url "$RPC")
 cast send "$PM" "multicall(bytes[])" "[$DEC,$COL,$UNW,$SWP]" --private-key $KEY --rpc-url "$RPC" >/dev/null
 DAI_AFTER=$(cast call $DAI "balanceOf(address)(uint256)" $ME --rpc-url "$RPC" | awk '{print $1}')
 ETH_AFTER=$(cast balance $ME --rpc-url "$RPC")
-echo "DAI received (wei): $(python3 -c "print($DAI_AFTER-$DAI_BEFORE)")"
-echo "ETH change incl. gas (wei): $(python3 -c "print($ETH_AFTER-$ETH_BEFORE)")"
-[ "$(python3 -c "print(int($DAI_AFTER>$DAI_BEFORE))")" = "1" ]
+echo "DAI received (wei): $("$PYTHON" -c "print($DAI_AFTER-$DAI_BEFORE)")"
+echo "ETH change incl. gas (wei): $("$PYTHON" -c "print($ETH_AFTER-$ETH_BEFORE)")"
+[ "$("$PYTHON" -c "print(int($DAI_AFTER>$DAI_BEFORE))")" = "1" ]
 echo "== close the rest, then burn the NFT"
-REST=$(python3 -c "print($LIQ-$HALF)")
+REST=$("$PYTHON" -c "print($LIQ-$HALF)")
 DEC2=$(cast calldata "decreaseLiquidity((uint256,uint128,uint256,uint256,uint256))" "($ID,$REST,0,0,$DEADLINE)")
 COL2=$(cast calldata "collect((uint256,address,uint128,uint128))" "($ID,$ME,$MAXU,$MAXU)")
 cast send "$PM" "multicall(bytes[])" "[$DEC2,$COL2]" --private-key $KEY --rpc-url "$RPC" >/dev/null

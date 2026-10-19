@@ -323,3 +323,34 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   with the justified set above.
 - **Reversal:** delete `SwapexLimitOrders.sol`, the mocks and `LimitOrders.t.sol`, revert
   `remappings.txt` + `TransferHelper.sol`, and drop this entry's buffer rule with the UI.
+
+## 2026-10-19 - Limit-order wiring: deploy, manifests, ABIs, e2e (planned C2)
+
+- **Decision:** `script/Deploy.s.sol` deploys `SwapexLimitOrders` (bound to the router) as the
+  last contract and writes `limitOrders` + `limitOrdersCodehash` into `deployments/<id>.json`;
+  `scripts/export-abis.sh` exports `SwapexLimitOrders.json` alongside the other ABIs. The
+  CREATE-order prefix is preserved, so the first four addresses stay exactly as before and the
+  new contract is a deterministic fifth; only the seed tokens shift one deployer nonce (both
+  local manifests are gitignored dev artifacts and regenerate on every `dev.sh`/e2e run - the
+  tracked file is the web's exported copy, which was regenerated to match).
+- **Decision:** local e2e covers the limit-order round trip in a new `script/E2ELimitOrder.s.sol`
+  wired into `scripts/e2e-local.sh`: chain-id guard (`31337` only), anvil public dev keys only,
+  maker signs the EIP-712 order (quoter price minus the 0.1% buffer from the C1 decision), the
+  keeper fills 60% then the remainder, and the script asserts the filled amounts, the stored
+  state, the maker's floor, both balance deltas, zero contract custody and `canFill == false`.
+  The order is 10e6 tUSDC (~$10): a first attempt at 1000e6 failed honestly with
+  `InsufficientLiquidity()` because the seeded pool carries only ~$120 of the other side - the
+  e2e amount must fit the seed.
+- **Fixes on the way:** `scripts/e2e-positions.sh` called `python3` directly and died on the
+  dead Windows App Execution alias; it now uses the same run-to-verify `python3` -> `py`
+  detection as the other scripts. `scripts/e2e-local.sh`'s EXIT trap gained a `taskkill`
+  fallback because a Windows anvil once survived `kill`, and a surviving node makes the next
+  run *reuse* its state, so deployment addresses drift and the exported web manifest stops
+  matching the local one (found by diffing the two manifests).
+- **Verified by running:** `scripts/e2e-local.sh` (deploy + seed + swaps + limit-order round
+  trip -> OK) and `scripts/e2e-positions.sh` (mint/decrease/collect/unwrap/burn -> OK) on one
+  fresh node; no anvil process left after the run; `scripts/export-abis.sh ../Swapex--main`
+  then manifest diff: `limitOrders` and token addresses match local; `forge test` 104/104;
+  web `npm test` 150/150, `npm run lint` 0 errors (16 pre-existing warnings).
+- **Reversal:** remove the deploy/log/manifest lines, the ABI spec line, the e2e script +
+  its `e2e-local.sh` call, and revert the two script fixes.

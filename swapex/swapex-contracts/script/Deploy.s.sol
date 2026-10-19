@@ -6,6 +6,7 @@ import {SwapexFactory} from "../src/v3/SwapexFactory.sol";
 import {SwapexRouter} from "../src/periphery/SwapexRouter.sol";
 import {SwapexPositionManager} from "../src/periphery/SwapexPositionManager.sol";
 import {SwapexQuoter} from "../src/periphery/SwapexQuoter.sol";
+import {SwapexLimitOrders} from "../src/periphery/SwapexLimitOrders.sol";
 import {MockWETH} from "../test/mocks/MockWETH.sol";
 
 /// Testnet-only deployment.
@@ -28,6 +29,7 @@ contract Deploy is Script {
         SwapexRouter router;
         SwapexPositionManager positionManager;
         SwapexQuoter quoter;
+        SwapexLimitOrders limitOrders;
         address weth;
     }
 
@@ -64,6 +66,7 @@ contract Deploy is Script {
         d.router = new SwapexRouter(address(d.factory), weth);
         d.positionManager = new SwapexPositionManager(address(d.factory), weth);
         d.quoter = new SwapexQuoter(address(d.factory));
+        d.limitOrders = new SwapexLimitOrders(address(d.router));
         vm.stopBroadcast();
 
         console2.log("chainId", block.chainid);
@@ -71,6 +74,7 @@ contract Deploy is Script {
         console2.log("SwapexRouter", address(d.router));
         console2.log("SwapexPositionManager", address(d.positionManager));
         console2.log("SwapexQuoter", address(d.quoter));
+        console2.log("SwapexLimitOrders", address(d.limitOrders));
         console2.log("WETH9", weth);
 
         _writeManifest(d);
@@ -87,10 +91,12 @@ contract Deploy is Script {
         vm.serializeAddress(key, "router", address(d.router));
         vm.serializeAddress(key, "positionManager", address(d.positionManager));
         vm.serializeAddress(key, "quoter", address(d.quoter));
+        vm.serializeAddress(key, "limitOrders", address(d.limitOrders));
         vm.serializeBytes32(key, "factoryCodehash", address(d.factory).codehash);
         vm.serializeBytes32(key, "routerCodehash", address(d.router).codehash);
         vm.serializeBytes32(key, "positionManagerCodehash", address(d.positionManager).codehash);
-        string memory json = vm.serializeBytes32(key, "quoterCodehash", address(d.quoter).codehash);
+        vm.serializeBytes32(key, "quoterCodehash", address(d.quoter).codehash);
+        string memory json = vm.serializeBytes32(key, "limitOrdersCodehash", address(d.limitOrders).codehash);
         vm.writeJson(json, string.concat("deployments/", vm.toString(block.chainid), ".json"));
     }
 }
