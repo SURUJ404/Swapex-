@@ -20,7 +20,7 @@
     "@web3-react/walletconnect-connector": "^6.2.13",
     "@web3-react/walletlink-connector": "^6.2.14",
     "ethers": "^5.8.0",
-    "next": "16.2.6",
+    "next": "16.4.2",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "styled-components": "^5.3.11"
