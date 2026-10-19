@@ -17,7 +17,7 @@ Open-source, testnet-only DEX built from scratch (Uniswap-style V3 pools; V4-sty
 - Web: cd Swapex--main && npm ci && npm run lint && npm test && npm run build
 - Browser e2e (local stack must be running): cd Swapex--main && npm run e2e
 - Format: cd Swapex--main && npm run format
-- Indexer: cd swapex-indexer && npm test && npm run typecheck
+- Indexer: cd swapex-indexer && npm test && npm run typecheck && npm run test:integration (needs foundry + Git Bash)
 
 ## Rules
 1. Testnet only. No mainnet. No secrets or private keys in the repo (the public anvil dev key is allowed in local scripts only).

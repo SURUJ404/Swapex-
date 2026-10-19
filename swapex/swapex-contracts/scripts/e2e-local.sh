@@ -12,10 +12,21 @@ if ! cast chain-id --rpc-url "$RPC" >/dev/null 2>&1; then
   for _ in $(seq 1 30); do cast chain-id --rpc-url "$RPC" >/dev/null 2>&1 && break; sleep 0.5; done
 fi
 
+# python3 on Linux/macOS; fall back to py (Windows). Each candidate is verified by
+# actually running it: the Windows python3 App Execution alias exists but never runs.
+PYTHON=""
+for cand in python3 py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys" >/dev/null 2>&1; then
+    PYTHON=$cand
+    break
+  fi
+done
+[ -n "$PYTHON" ] || { echo "Missing: python3 (or py). Install Python 3." >&2; exit 1; }
+
 forge script script/Deploy.s.sol --rpc-url "$RPC" --private-key $KEY --broadcast >/dev/null
 forge script script/SeedTestnet.s.sol --rpc-url "$RPC" --private-key $KEY --broadcast >/dev/null
 
-j() { python3 -c "import json,sys;d=json.load(open('$1'));print($2)"; }
+j() { "$PYTHON" -c "import json,sys;d=json.load(open('$1'));print($2)"; }
 ROUTER=$(j deployments/31337.json "d['router']"); QUOTER=$(j deployments/31337.json "d['quoter']")
 WETH=$(j deployments/31337.json "d['weth9']"); USDC=$(j deployments/31337.seed.json "d['tokens'][0]['address']")
 DEADLINE=$(( $(date +%s) + 3600 ))

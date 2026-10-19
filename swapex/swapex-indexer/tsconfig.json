@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "outDir": "dist"
   },
-  "include": ["src", "tests"]
+  "include": ["src", "tests", "vitest.config.ts", "vitest.integration.config.ts"]
 }

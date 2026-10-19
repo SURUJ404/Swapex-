@@ -244,3 +244,29 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   to HEAD), `next dev` serving, fresh indexer synced to the new chain (cursor 4), and
   the swap e2e spec passed against that stack (1 passed). Web `npm test` 150 passed,
   lint 0 errors (16 pre-existing warnings). Reversible: revert.
+
+
+## 2026-10-19 - Indexer <-> chain integration test (prompt section 1, last item)
+
+- **Decision:** `swapex-indexer/tests/integration.test.ts` starts a fresh anvil on its own free
+  port (foundry from `~/.foundry/bin`, prepended to PATH), runs
+  `swapex-contracts/scripts/e2e-local.sh` (deploy + seed + two swaps), runs this package's own
+  pipeline (`openDb` / `runOnce` / `buildServer`, wired exactly as `src/index.ts` wires it)
+  against a temp database, serves the API on an ephemeral port and asserts it against the chain:
+  health + cursor == head, pool set, token0/token1/fee/slot0/liquidity, swap history, volume,
+  fees, txCount24h, reserves, candle sums, token metadata, the stable-reference USD price rule,
+  TVL, position ownership via `ownerOf`, and the 400/404 validation paths.
+- **Independent ledger check:** for both tokens of every pool the API reserves are cross-checked
+  against `balanceOf(pool) == sum(Mint) - sum(Collect) + signed sum(Swap)` - Burn only marks
+  amounts owed, so nothing leaves a pool until collect. A missed or double-counted event fails here.
+- **Gating (why it is not in `npm test`):** the test needs foundry, Git Bash and a local chain -
+  the same class of requirement as the Playwright suite. `vitest.config.ts` excludes it from the
+  default run (still 40 tests); `npm run test:integration` uses `vitest.integration.config.ts`
+  (300s hook/test timeouts, single file).
+- **Fix on the way:** `swapex-contracts/scripts/e2e-local.sh` resolved `python3` directly, which is
+  the dead Windows App Execution alias on this machine; it now uses the same run-it-to-verify
+  `python3` -> `py` detection as `setup.sh`/`dev.sh`, so the script actually runs on Windows.
+- **Verified by running:** `npm run test:integration` 8 passed (~15s); `npm test` 40 passed;
+  `tsc --noEmit` exit 0; the e2e deploy regenerated `deployments/31337.json` identical to HEAD.
+- **Reversal:** delete the two vitest configs, the test file and the package script; the
+  `e2e-local.sh` python fix should stay either way.
