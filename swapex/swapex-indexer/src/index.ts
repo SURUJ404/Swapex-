@@ -37,6 +37,7 @@ async function main(): Promise<void> {
     chainId: config.CHAIN_ID,
     corsOrigins: config.CORS_ORIGINS,
     meta,
+    client,
   })
   await app.listen({ port: config.PORT, host: '0.0.0.0' })
   console.log(`api listening on :${config.PORT}`)

@@ -354,3 +354,44 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   web `npm test` 150/150, `npm run lint` 0 errors (16 pre-existing warnings).
 - **Reversal:** remove the deploy/log/manifest lines, the ABI spec line, the e2e script +
   its `e2e-local.sh` call, and revert the two script fixes.
+
+## 2026-10-20 - Indexer limit orders: submit API, event-derived state, keeper (planned C3)
+
+- **Decision:** the indexer stores submitted limit orders and derives everything else from
+  events. New `src/eip712.ts` (shared order types/domain + ERC-1271 ABI), an `orders`
+  table keyed by the EIP-712 hash (the payload is fully determined by the hash; the fee
+  tier is the only unsigned field, so the only conflict possible is the same hash under a
+  different fee -> 409), and `OrderFilled`/`OrderCancelled` fragments in `ALL_EVENTS` with
+  `manifest.limitOrders` added to the indexer's known address set. `POST /orders`
+  re-verifies everything the contract would check against *this* chain: payload shape,
+  contract field rules in contract order (expiry before signature, so an expired order
+  never consumes signature work), the EIP-712 hash computed server-side and verified as
+  the maker EOA (viem `verifyTypedData`), then ERC-1271 for contract makers when an RPC
+  client is wired, plus - with a live client - on-chain `orders`/`cancelled` state
+  (already-filled / already-cancelled -> 409) and a pool-exists-for-pair+fee check (400).
+  `GET /orders` returns stored rows decorated with fill/cancel/expiry state computed from
+  events at read time, so status reorgs away with the events instead of living in a
+  denormalized column. `limitOrders` is an optional manifest field: older manifests still
+  load, and the orders endpoints then honestly report 503 (POST) / empty (GET).
+- **Decision:** `scripts/keeper-limit.sh` closes the loop: it polls
+  `GET /orders?status=open`, fills each order's remaining amount with `cast send`
+  (FillParams floor = 0 - the contract itself enforces the maker's signed floor across
+  fills, as `e2e-local.sh` proves), isolates per-order failures so one bad order does not
+  stop the pass, and supports a `WATCH` seconds loop for a long-running bot.
+- **Fix on the way:** viem caches `getBlockNumber()` by default - a head read taken after
+  the keeper's receipt still returned the pre-tx value, so cursor-equality made catch-up
+  loops declare "caught up" while the fill's block was skipped. Found as an empty
+  `status=filled` response with the fill already final on chain; proven stale by an
+  `eth_blockNumber` vs `getBlockNumber({cacheTime: 0})` experiment on a scratch anvil;
+  fixed with `cacheTime: 0` on `createChainClient` (the daemon path) and the integration
+  test's client.
+- **Verified by running:** `npm run typecheck`; `npm test` 63/63 across 9 files (23 new:
+  submit validation/EOA/ERC-1271/chain-state stubs, aggregation + reorg rollback,
+  fragment round trips); `npm run test:integration` 9/9 on a fresh anvil with
+  `e2e-local.sh`: POST the signed order (server hash == viem hash == contract
+  `orderHash`), the keeper script fills it, reindex -> `status=filled` with amounts equal
+  to chain `orders()`, re-POST -> 409, a second order cancelled on chain ->
+  `status=cancelled`, no open orders left.
+- **Reversal:** drop the two routes, `eip712.ts`, `aggregate/orders.ts`, the orders table
+  and its functions, the keeper script and the `limitOrders` known-address line; the
+  `cacheTime: 0` fix should survive any reversal.

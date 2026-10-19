@@ -8,20 +8,25 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createServer, type AddressInfo } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   createPublicClient,
+  createWalletClient,
+  decodeFunctionResult,
+  encodeFunctionData,
   formatUnits,
+  hashTypedData,
   http,
   parseAbi,
   parseEventLogs,
   type AbiEvent,
   type PublicClient,
 } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { FACTORY_EVENTS, POOL_EVENTS, POSITION_MANAGER_EVENTS } from '../src/abis'
 import { getCursor, openDb, type Db } from '../src/db'
 import { loadManifest, type Manifest } from '../src/deployment'
@@ -29,12 +34,16 @@ import { runOnce } from '../src/indexer'
 import { createTokenMetaProvider } from '../src/aggregate/meta'
 import { buildServer } from '../src/api/server'
 import { referenceStables } from '../src/aggregate/prices'
+import { ORDER_TYPES, orderDomain } from '../src/eip712'
 import type { FastifyInstance } from 'fastify'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const ROOT = resolve(HERE, '..', '..') // swapex/
 const CONTRACTS = resolve(ROOT, 'swapex-contracts')
 const CHAIN_ID = 31337
+// anvil public development keys (same ones scripts/e2e-local.sh uses); local testing only
+const MAKER_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+const FILLER_KEY = '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d'
 
 const ERC20_ABI = parseAbi([
   'function symbol() view returns (string)',
@@ -199,6 +208,7 @@ describe('integration: anvil + e2e-local.sh + indexer API vs chain', () => {
   let app: FastifyInstance | null = null
   let workDir = ''
   let baseUrl = ''
+  let rpcUrl = ''
   let client: PublicClient
   let manifest: Manifest
   let chainPools: ChainPool[] = []
@@ -210,6 +220,17 @@ describe('integration: anvil + e2e-local.sh + indexer API vs chain', () => {
     const res = await fetch(baseUrl + path)
     const body = (await res.json()) as T
     return { status: res.status, body }
+  }
+
+  /** index until the cursor equals the chain head (used after keeper fills and cancels) */
+  const catchUp = async (): Promise<void> => {
+    for (let i = 0; i < 60; i++) {
+      const head = Number(await client.getBlockNumber())
+      await runOnce(client, db!, manifest, 12)
+      if (getCursor(db!) === head) return
+      await sleep(200)
+    }
+    throw new Error('indexer did not catch up')
   }
 
   const tokenInfo = async (address: string): Promise<TokenInfo> => {
@@ -237,8 +258,8 @@ describe('integration: anvil + e2e-local.sh + indexer API vs chain', () => {
 
     workDir = mkdtempSync(join(tmpdir(), 'swapex-int-'))
     const rpcPort = await freePort()
-    const rpcUrl = `http://127.0.0.1:${rpcPort}`
-    client = createPublicClient({ transport: http(rpcUrl) })
+    rpcUrl = `http://127.0.0.1:${rpcPort}`
+    client = createPublicClient({ transport: http(rpcUrl), cacheTime: 0 })
 
     // 1. fresh local chain
     anvil = spawn(anvilCmd, ['--silent', '--port', String(rpcPort)], { env: spawnEnv, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -275,13 +296,14 @@ describe('integration: anvil + e2e-local.sh + indexer API vs chain', () => {
       await sleep(200)
     }
 
-    // 4. the HTTP API under test
+    // 4. the HTTP API under test (client wired: POST /orders does ERC-1271 + chain-state checks)
     app = await buildServer({
       db,
       manifest,
       chainId: CHAIN_ID,
       corsOrigins: ['http://localhost:3000'],
       meta: createTokenMetaProvider(manifest, rpcUrl),
+      client,
     })
     await app.listen({ port: 0, host: '127.0.0.1' })
     const { port } = app.server.address() as AddressInfo
@@ -657,4 +679,214 @@ describe('integration: anvil + e2e-local.sh + indexer API vs chain', () => {
     check('unknown token -> 404', unknownToken.status === 404, `${unknownToken.status}`)
     finish('input validation')
   })
+
+  it('limit orders: submit, keeper fill, cancel - all equal the chain', async () => {
+    const limit = manifest.limitOrders
+    check('manifest has limitOrders', Boolean(limit), String(limit))
+    if (!limit) {
+      finish('limit orders manifest')
+      return
+    }
+    const deployments = JSON.parse(readFileSync(join(CONTRACTS, 'deployments', `${CHAIN_ID}.json`), 'utf8')) as {
+      quoter?: string
+    }
+    const quoter = deployments.quoter
+    check('manifest has quoter', Boolean(quoter), String(quoter))
+
+    // the seeded tUSDC/weth 3000 pool, the same one e2e-local.sh swaps through
+    const usdcAddr = lower(manifest.tokens[0]!.address)
+    const pool = chainPools.find((p) => p.fee === 3000 && (p.token0 === usdcAddr || p.token1 === usdcAddr))
+    check('seeded tUSDC pool at fee 3000 exists', Boolean(pool))
+    if (!pool || !quoter) {
+      finish('limit orders setup')
+      return
+    }
+    const wethAddr = pool.token0 === usdcAddr ? pool.token1 : pool.token0
+
+    // realistic floor: the quoter's price minus the documented 0.1% buffer
+    const QUOTER_ABI = parseAbi([
+      'function quoteExactInputSingle((address,address,uint24,uint256,uint160)) returns ((uint256,uint160,int24,uint256))',
+    ])
+    const quoteRes = await client.call({
+      to: quoter as `0x${string}`,
+      data: encodeFunctionData({
+        abi: QUOTER_ABI,
+        functionName: 'quoteExactInputSingle',
+        args: [[usdcAddr as `0x${string}`, wethAddr as `0x${string}`, 3000, 10n ** 6n, 0n]],
+      }),
+    })
+    check('quoter returned a quote', Boolean(quoteRes.data))
+    if (!quoteRes.data) {
+      finish('limit orders quote')
+      return
+    }
+    const quote = decodeFunctionResult({
+      abi: QUOTER_ABI,
+      functionName: 'quoteExactInputSingle',
+      data: quoteRes.data,
+    })[0]
+    const minAmountOut = quote - quote / 1000n
+
+    const maker = privateKeyToAccount(MAKER_KEY)
+    const message = {
+      maker: maker.address,
+      tokenIn: usdcAddr as `0x${string}`,
+      tokenOut: wethAddr as `0x${string}`,
+      amountIn: 10n ** 6n,
+      minAmountOut,
+      expiry: BigInt(Math.floor(Date.now() / 1000) + 86400),
+      nonce: 7n,
+      receiver: maker.address,
+    }
+    const domain = orderDomain(CHAIN_ID, limit as `0x${string}`)
+    const signature = await maker.signTypedData({ domain, types: ORDER_TYPES, primaryType: 'Order', message })
+    const orderHash = hashTypedData({ domain, types: ORDER_TYPES, primaryType: 'Order', message })
+
+    // viem's EIP-712 hash must equal the contract's own orderHash (otherwise every fill reverts)
+    const ORDER_ABI = parseAbi([
+      'function orderHash((address,address,address,uint256,uint256,uint256,uint256,address)) view returns (bytes32)',
+    ])
+    const chainHash = await client.readContract({
+      address: limit as `0x${string}`,
+      abi: ORDER_ABI,
+      functionName: 'orderHash',
+      args: [
+        [message.maker, message.tokenIn, message.tokenOut, message.amountIn, message.minAmountOut, message.expiry, message.nonce, message.receiver],
+      ],
+    })
+    check('viem hashTypedData == contract orderHash', chainHash === orderHash, `${chainHash} vs ${orderHash}`)
+
+    const post = async (body: unknown): Promise<{ status: number; body: Record<string, unknown> }> => {
+      const res = await fetch(baseUrl + '/orders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> }
+    }
+    const payload = {
+      order: {
+        maker: message.maker,
+        tokenIn: message.tokenIn,
+        tokenOut: message.tokenOut,
+        amountIn: message.amountIn.toString(),
+        minAmountOut: message.minAmountOut.toString(),
+        expiry: message.expiry.toString(),
+        nonce: message.nonce.toString(),
+        receiver: message.receiver,
+      },
+      signature,
+      fee: 3000,
+    }
+
+    const accepted = await post(payload)
+    check('POST accepts the signed order', accepted.status === 201, JSON.stringify(accepted.body))
+    check('POST returns the canonical hash', accepted.body.orderHash === orderHash, String(accepted.body.orderHash))
+    check('verified as eoa', accepted.body.checked === 'eoa', String(accepted.body.checked))
+
+    const dup = await post(payload)
+    check('re-submit is a duplicate, not an error', dup.status === 200, `${dup.status}`)
+
+    const wrongSigner = privateKeyToAccount(FILLER_KEY)
+    const badSig = await post({
+      ...payload,
+      signature: await wrongSigner.signTypedData({ domain, types: ORDER_TYPES, primaryType: 'Order', message }),
+    })
+    check('wrong-key signature rejected', badSig.status === 400, `${badSig.status} ${JSON.stringify(badSig.body)}`)
+
+    const openList = await api<{ orders: { orderHash: string; status: string; remaining: string; fillable: boolean }[] }>(
+      '/orders?status=open'
+    )
+    const openOrder = openList.body.orders.find((o) => o.orderHash === orderHash)
+    check('order listed as open', openOrder?.status === 'open' && openOrder?.fillable === true)
+    check('remaining equals amountIn before any fill', openOrder?.remaining === '1000000', String(openOrder?.remaining))
+
+    // --- the keeper fills it from the open list, exactly as a bot would
+    const keeper = await runProcess(bashPath(), [join(CONTRACTS, 'scripts', 'keeper-limit.sh')], {
+      env: {
+        RPC: rpcUrl,
+        INDEXER_URL: baseUrl,
+        PATH: join(homedir(), '.foundry', 'bin') + delimiter + (process.env.PATH ?? ''),
+      },
+      cwd: CONTRACTS,
+    })
+    check('keeper exits 0', keeper.code === 0, `exit ${keeper.code}: ${keeper.out.trim()}`)
+    check('keeper reported this fill', keeper.out.includes(`filled ${orderHash}`), keeper.out.trim())
+    await catchUp()
+
+    const filledList = await api<{
+      orders: { orderHash: string; status: string; filled: string; amountOutReceived: string; remaining: string; fillable: boolean }[]
+    }>('/orders?status=filled')
+    const filled = filledList.body.orders.find((o) => o.orderHash === orderHash)
+    check('API status is filled after the keeper', filled?.status === 'filled', String(filled?.status))
+    check('API filled amount equals amountIn', filled?.filled === '1000000', String(filled?.filled))
+    check('API remaining is zero', filled?.remaining === '0', String(filled?.remaining))
+    check('filled order not fillable', filled?.fillable === false, String(filled?.fillable))
+
+    // the chain agrees, number for number
+    const LIMIT_ABI = parseAbi([
+      'function orders(bytes32) view returns (uint256 filled, uint256 amountOutReceived)',
+      'function cancel(uint256)',
+    ])
+    const state = await client.readContract({
+      address: limit as `0x${string}`,
+      abi: LIMIT_ABI,
+      functionName: 'orders',
+      args: [orderHash as `0x${string}`],
+    })
+    check('chain filled == amountIn', state[0] === 10n ** 6n, String(state[0]))
+    check('chain paid something', state[1] > 0n, String(state[1]))
+    check(
+      'API amountOutReceived == chain',
+      filled?.amountOutReceived === state[1].toString(),
+      `${filled?.amountOutReceived} vs ${state[1]}`
+    )
+    check('maker floor held (out >= minAmountOut)', state[1] >= minAmountOut, `${state[1]} < ${minAmountOut}`)
+
+    const refilled = await post(payload)
+    check(
+      're-POST of a filled order -> 409',
+      refilled.status === 409,
+      `${refilled.status} ${JSON.stringify(refilled.body)}`
+    )
+
+    // --- a second order, cancelled by the maker on chain
+    const messageB = { ...message, nonce: 8n }
+    const sigB = await maker.signTypedData({ domain, types: ORDER_TYPES, primaryType: 'Order', message: messageB })
+    const hashB = hashTypedData({ domain, types: ORDER_TYPES, primaryType: 'Order', message: messageB })
+    const postB = await post({ ...payload, order: { ...payload.order, nonce: '8' }, signature: sigB })
+    check('second order accepted', postB.status === 201, JSON.stringify(postB.body))
+
+    const wallet = createWalletClient({ account: maker, transport: http(rpcUrl) })
+    const cancelTx = await wallet.sendTransaction({
+      account: maker,
+      chain: null,
+      to: limit as `0x${string}`,
+      data: encodeFunctionData({ abi: LIMIT_ABI, functionName: 'cancel', args: [messageB.nonce] }),
+    })
+    await client.waitForTransactionReceipt({ hash: cancelTx })
+    await catchUp()
+
+    const cancelledList = await api<{ orders: { orderHash: string; status: string; fillable: boolean }[] }>(
+      '/orders?status=cancelled'
+    )
+    const cancelled = cancelledList.body.orders.find((o) => o.orderHash === hashB)
+    check('cancel event marks the order cancelled', cancelled?.status === 'cancelled', String(cancelled?.status))
+    check('cancelled order not fillable', cancelled?.fillable === false, String(cancelled?.fillable))
+
+    const openAfter = await api<{ total: number }>('/orders?status=open')
+    check('no open orders remain', openAfter.body.total === 0, String(openAfter.body.total))
+
+    const all = await api<{ orders: { orderHash: string; status: string }[]; total: number }>('/orders?limit=100')
+    check('both submitted orders listed', all.body.total === 2, String(all.body.total))
+    const statuses = new Map(all.body.orders.map((o) => [o.orderHash, o.status]))
+    check('first order reads filled from events', statuses.get(orderHash) === 'filled', String(statuses.get(orderHash)))
+    check(
+      'second order reads cancelled from events',
+      statuses.get(hashB) === 'cancelled',
+      String(statuses.get(hashB))
+    )
+
+    finish('limit orders')
+  }, 300000)
 })

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseAbi, encodeEventTopics, encodeAbiParameters, type Abi, type AbiEvent, type Log } from 'viem'
-import { ALL_EVENTS, FACTORY_EVENTS, POOL_EVENTS, POSITION_MANAGER_EVENTS } from '../src/abis'
+import { ALL_EVENTS, FACTORY_EVENTS, POOL_EVENTS, POSITION_MANAGER_EVENTS, LIMIT_ORDER_EVENTS } from '../src/abis'
 import { decodeLogs } from '../src/decode'
 
 const ABI = parseAbi(ALL_EVENTS as readonly string[]) as Abi
@@ -164,6 +164,8 @@ describe('decodeLogs', () => {
   })
 
   it('all fragments are valid event ABIs', () => {
-    expect(FACTORY_EVENTS.length + POOL_EVENTS.length + POSITION_MANAGER_EVENTS.length).toBe(ALL_EVENTS.length)
+    expect(
+      FACTORY_EVENTS.length + POOL_EVENTS.length + POSITION_MANAGER_EVENTS.length + LIMIT_ORDER_EVENTS.length
+    ).toBe(ALL_EVENTS.length)
   })
 })

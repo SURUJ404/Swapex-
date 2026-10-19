@@ -21,4 +21,9 @@ export const POSITION_MANAGER_EVENTS = [
   'event Transfer(address indexed from, address indexed to, uint256 indexed tokenId)',
 ] as const
 
-export const ALL_EVENTS = [...FACTORY_EVENTS, ...POOL_EVENTS, ...POSITION_MANAGER_EVENTS]
+export const LIMIT_ORDER_EVENTS = [
+  'event OrderFilled(bytes32 indexed orderHash, address indexed maker, address indexed filler, address tokenIn, address tokenOut, uint256 amountInFilled, uint256 amountOutPaid)',
+  'event OrderCancelled(address indexed maker, uint256 nonce)',
+] as const
+
+export const ALL_EVENTS = [...FACTORY_EVENTS, ...POOL_EVENTS, ...POSITION_MANAGER_EVENTS, ...LIMIT_ORDER_EVENTS]

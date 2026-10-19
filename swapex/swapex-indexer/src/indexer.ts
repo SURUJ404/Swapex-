@@ -31,9 +31,9 @@ type IndexClient = Pick<ChainClient, 'getBlockNumber' | 'getLogs' | 'getBlock'>
  * 1. Reorg check: stored hashes in the unfinalized window are compared against the
  *    chain; a mismatch rolls events/pools/cursor back to the fork point.
  * 2. Index forward from cursor+1 (or the manifest's deployment block), capped at
- *    BATCH_SIZE. Addresses = factory + position manager + every pool seen so far; a
- *    PoolCreated inside the range triggers an extra fetch for the new pool so
- *    same-range pool events are not missed.
+ *    BATCH_SIZE. Addresses = factory + position manager + limit-order contract +
+ *    every pool seen so far; a PoolCreated inside the range triggers an extra
+ *    fetch for the new pool so same-range pool events are not missed.
  * 3. Store block hashes for the last `reorgDepth` blocks so the next pass can
  *    detect a reorg, and commit everything in one SQLite transaction per step.
  */
@@ -52,7 +52,12 @@ export async function runOnce(
   const to = Math.min(head, from + BATCH_SIZE - 1)
 
   const known = new Set(
-    [manifest.factory, manifest.positionManager, ...poolAddresses(db)].map((a) => a.toLowerCase())
+    [
+      manifest.factory,
+      manifest.positionManager,
+      ...(manifest.limitOrders ? [manifest.limitOrders] : []),
+      ...poolAddresses(db),
+    ].map((a) => a.toLowerCase())
   )
 
   const fetchLogs = async (addresses: string[]) => {

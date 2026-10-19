@@ -14,6 +14,9 @@ const manifestSchema = z.object({
   blockNumber: z.number().int().nonnegative().default(0),
   factory: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   positionManager: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  // written by Deploy.s.sol since the limit-order phase; optional so manifests
+  // from older deployments still load (the orders endpoints then report it absent)
+  limitOrders: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   tokens: z.array(tokenSchema).default([]),
 })
 

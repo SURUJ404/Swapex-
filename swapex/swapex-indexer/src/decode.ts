@@ -37,7 +37,7 @@ export function decodeLogs(logs: Log[]): StoredEvent[] {
       blockHash: p.blockHash,
       txHash: p.transactionHash,
       logIndex: Number(p.logIndex),
-      address: p.address,
+      address: p.address.toLowerCase(), // every query compares against lowercased params
       event: p.eventName,
       args: JSON.stringify(jsonSafe(p.args ?? {})),
     })
