@@ -28,6 +28,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 devserver.log
+*-e2e.log
 
 # env files (never commit secrets)
 .env*

@@ -66,6 +66,10 @@ Swapex stays Next.js. We copy the *experience*, not the code.
 - Done: top-nav search (symbol, pool pair, or 0x address) routing to explore detail pages or
   the filtered list; positions discovery prefers the indexer with ownerOf verification and a
   cursor-gap Transfer scan, full event scan as fallback.
+- Done: Playwright browser e2e (`npm run e2e`, 5 specs against a running local stack): connect
+  through the wallet modal via the injected provider, swap through the confirm modal, add a
+  full-range position, remove an owned position, explore with indexer data (token cells, pool
+  cells, pool search narrowing).
 - Next: limit orders and the viem + wagmi migration (W8).
 - Removed: the old V2 add/remove/create/pool forms. /remove and /create redirect to /pool and /add.
 
@@ -76,8 +80,10 @@ Swapex stays Next.js. We copy the *experience*, not the code.
   `npm run build` all pass on Node 24. Swap, positions, and now Explore (tokens + pools tables + detail
   pages with charts) are verified against a live local stack: anvil + indexer + `next start`, including
   the top-nav search routes (symbol/pair/address, ambiguous and no-match fallbacks, indexer-down banner)
-  and position ids from the indexer cross-checked against on-chain `ownerOf`. Wallet
-  connection is still only verified by code inspection + the build; a full browser + wallet run still needs
+  and position ids from the indexer cross-checked against on-chain `ownerOf`. Browser e2e
+  (`npm run e2e`: 5 Playwright specs) runs the wallet path headless against that stack -
+  injected-provider connect plus swap/add/remove transactions on an anvil with unlocked dev
+  accounts. A real MetaMask extension (lock state, signing prompts, network-switch UX) is still
   a manual check against the local anvil stack (`dev.sh`).
 - Indexer: `npm test` (40 pass) and `npm run typecheck` clean on Node 24. Verified live against anvil with
   real Swap events (timestamps spread across an hour to produce multi-point candles).

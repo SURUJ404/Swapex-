@@ -161,3 +161,52 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   positions with badges and detail links.
 - **Verified by running:** web 150 tests (129 node + 21 component), lint 0 errors, prod
   build. Reversible: revert restores the old single-project config.
+
+## 2026-10-19 - Browser e2e against the local stack (S24)
+
+- **Playwright added:** `@playwright/test`, `playwright.config.js` (testDir `e2e`, baseURL
+  `http://localhost:3000`, workers 1, chromium, trace on failure), script `npm run e2e` that
+  expects the local stack running (anvil + deploy/seed + indexer + `next start` with
+  `NEXT_PUBLIC_CHAIN_ID=31337` and `NEXT_PUBLIC_INDEXER_URL=http://127.0.0.1:4000`). Five
+  specs: connect, swap through the confirm modal, add position, remove position,
+  explore-with-indexer.
+- **The browser cannot talk to anvil directly:** the app CSP allows
+  `connect-src 'self' https: wss: http://127.0.0.1:4000`, so fetches to :8545 are blocked.
+  The wallet fixture injects a `window.ethereum` shim that posts same-origin to
+  `/__e2e-rpc`; a Playwright route forwards those to anvil server-side (which also sidesteps
+  CORS). web3-react v6's InjectedConnector calls the **legacy `send('eth_requestAccounts')`
+  API expecting `{result}`** (not `request()`), so the shim implements both, plus `enable`,
+  `on`, `removeListener`, `isMetaMask`. Anvil's dev accounts are unlocked, so
+  `eth_sendTransaction` signs locally - no wallet UI to fake.
+- **Timing and selectors:** clicks before hydration land on inert SSR buttons, so
+  `connectWallet` waits for `networkidle` first; the header account is a `<span>`, so the
+  connected-state assertion is the `Disconnect` button. The nav searchbox ("Search tokens
+  and pools") substring-collides with the explore table's "Search tokens" - table queries
+  use `exact: true`.
+- **Amounts must respect the seed:** `WETH_SEED_WEI = 0.02 ether` per pool, so a 1 ETH swap
+  honestly returns "No liquidity for this pair" (quoter `InsufficientLiquidity`). Specs stay
+  inside the seed (0.001 ETH). Pool pair labels are address-sorted token0/token1, i.e.
+  "tUSDC / WETH" here, and token cells carry symbol + name - cell matches are anchored
+  (`/^tUSDC\b/`) and scoped to their own table.
+- **A drifted anvil clock fails every transaction quietly:** the long-running node had a
+  +6.2h offset (leftover `evm_increaseTime`), so every browser-clock deadline was already
+  past - `eth_estimateGas` reverted with custom error `0x203d82d8` = `Expired()`, the app
+  showed a 4-second error toast and left the confirm dialog open. Fixed with
+  `evm_setTime(<now>)` (a fresh anvil starts at wall time); custom errors were identified by
+  brute-forcing `cast sig` over every `error` declaration in the contracts.
+- **Stale indexer data after an anvil restart:** the DB cursor can equal the *new* chain's
+  head height (same height, different blocks), so old addresses are served confidently with
+  no reorg trigger. Fix: wipe `DATABASE_PATH` and restart - the indexer reloads
+  `deployments/<chainId>.json` at startup. The explore failure in the browser was CORS: the
+  indexer's default allowlist is `http://localhost:3000`, which is why the Playwright
+  baseURL is `localhost` and not `127.0.0.1` (the `requireIndexer` fixture checks `/health`
+  server-side so a down indexer fails plainly instead).
+- **Lint:** `eslint.config.mjs` turns off `react-hooks/rules-of-hooks` only for `e2e/**`
+  (Playwright fixture `use()` calls); everything else stays linted.
+- **Fresh-stack discipline:** the stack was redeployed on a clean anvil so the committed
+  `lib/deployments/31337.json` (canonical fresh-anvil addresses, identical to HEAD) matches
+  the chain the specs run against.
+- **Verified by running:** `npm run e2e` 5 passed - on reused state twice and on the fresh
+  canonical stack twice (after the env rebuild); `npm test` 150 passed; `npm run lint`
+  0 errors (16 pre-existing `<img>` warnings); plain `npm run build` and the local-env
+  build both succeed. Reversible: revert removes the config, specs and script.
