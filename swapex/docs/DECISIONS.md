@@ -134,3 +134,30 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   table error states, 375px toggle -> search -> detail; indexer rows for anvil account 0
   (ids 1-3) match `ownerOf` on chain. Wallet-connected UI path not exercised headless -
   the id source is covered by unit tests + the chain cross-check above.
+
+## 2026-10-19 - Component tests for the four interactive surfaces (S23)
+
+- **Two vitest projects, one config:** logic tests keep running in plain node; the new
+  `tests/components/*` suite runs in jsdom. Inline `test.projects` entries do not inherit
+  root-level Vite options, so the esbuild override (see below) is repeated per project.
+- **JSX lives in `.js` files (Next.js convention), and Vite's default `js` loader rejects
+  JSX.** `@vitejs/plugin-react` only sets `jsx: 'automatic'` - the loader is still picked
+  from the extension, so `.js` files with JSX fail to parse. The fix is the esbuild
+  override `{ jsx: 'automatic', loader: 'jsx', include: /\.[jt]sx?$/ }` per project; the
+  plugin was tried first and removed again (unneeded once the loader parses JSX).
+- **RTL needs explicit `cleanup()`:** vitest globals are off, so auto-cleanup never
+  registers and stale portals leak between tests ("found multiple elements"). Each
+  component test file imports `afterEach(cleanup)`.
+- **Mocks follow the established pattern:** mutable module state + `vi.mock` factories
+  (`useWeb3`, `usePositions`, `lib/config` with live getters for `DEPLOYMENT`/
+  `CONFIG_ERROR`, `next/link` as a plain `<a>`, `lib/tokenMeta`), never touching
+  `lib/contracts` - the layering guard still forbids `new Contract(` outside it.
+- **Covered flows:** ConfirmSwapModal summary rows + one-click confirm below 5% impact +
+  two-step confirm at/above it + cancel + pending-disabled + ack reset on reopen;
+  TokenSelectModal import-warning gate (disabled without wallet), successful import
+  (meta read -> persist -> select -> close), honest on-chain read failure, previously
+  imported address treated as known, no-match empty state; NetworkGuard all four
+  branches; PositionsList unavailable / connect / error / loading / empty / listed
+  positions with badges and detail links.
+- **Verified by running:** web 150 tests (129 node + 21 component), lint 0 errors, prod
+  build. Reversible: revert restores the old single-project config.

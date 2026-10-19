@@ -71,7 +71,8 @@ Swapex stays Next.js. We copy the *experience*, not the code.
 
 ## Honest status
 - Contracts: compiled and tested here with Foundry (80+ tests pass) and exercised end to end on a local anvil node.
-- Web app: `npm ci`, `npm test` (129 pass), `npm run lint` (0 errors, pre-existing `<img>` warnings only) and
+- Web app: `npm ci`, `npm test` (150 pass: 129 logic + 21 jsdom component tests covering ConfirmSwapModal,
+  TokenSelectModal, NetworkGuard, PositionsList), `npm run lint` (0 errors, pre-existing `<img>` warnings only) and
   `npm run build` all pass on Node 24. Swap, positions, and now Explore (tokens + pools tables + detail
   pages with charts) are verified against a live local stack: anvil + indexer + `next start`, including
   the top-nav search routes (symbol/pair/address, ambiguous and no-match fallbacks, indexer-down banner)
