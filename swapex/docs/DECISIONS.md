@@ -210,3 +210,37 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   canonical stack twice (after the env rebuild); `npm test` 150 passed; `npm run lint`
   0 errors (16 pre-existing `<img>` warnings); plain `npm run build` and the local-env
   build both succeed. Reversible: revert removes the config, specs and script.
+
+## 2026-10-19 - Scripts and CI refresh (S25)
+
+- **python3/py detection in the three shell scripts:** `setup.sh`, `dev.sh` and
+  `swapex-contracts/scripts/export-abis.sh` resolve an interpreter by *running* each
+  candidate (`python3 -c "import sys"`, then `py`) instead of checking
+  `command -v python3`: on this machine python3 resolves to the Windows App Execution
+  alias, which always fails ("Python was not found", exit 9009), so a plain existence
+  check would pick a dead interpreter. No other behavior change (per plan).
+- **Web CI final command set:** `Swapex--main/.github/workflows/ci.yml` moves to Node 24
+  (the version the whole stack is verified on) and gains an explicit
+  `working-directory`/`cache-dependency-path` under `swapex/Swapex--main` so the job is
+  correct even if the file is later moved to the repo root. Commands stay `npm ci`,
+  lint, test, build and `npm audit --omit=dev --audit-level=high` - nothing relaxed.
+  Playwright e2e is not wired into CI: it needs anvil + forge + indexer + a built app,
+  so it runs locally with `npm run e2e`; wiring it into CI would be a follow-up.
+- **New indexer workflow:** `swapex-indexer/.github/workflows/ci.yml` - node matrix
+  [20, 24] running `npm ci && npm test && npm run typecheck`, scoped to the package.
+  All 40 indexer tests + typecheck were run green on this machine first.
+- **Contracts CI untouched** (plan: ensure unchanged) - verified via git status.
+- **Note for the owner (no action taken):** GitHub Actions only scans workflows at the
+  repo *root* `.github/workflows/`; the per-package workflow files (web, contracts and
+  the new indexer one) sit under their packages and therefore do not execute on GitHub
+  today, while the root `.github/workflows/ci.yml` targets the root-level `apps/web` +
+  `contracts` layout (demo/legacy trees), not `swapex/`. Restructuring where CI runs is
+  a scope change - left as an owner decision.
+- **Verified by running:** `bash -n` on all three scripts; happy path picks `py` after
+  the dead python3 alias and writes a manifest identical to HEAD; missing-python path
+  prints `Missing: python3 (or py). Install Python 3.` and exits 1. `./setup.sh`
+  end-to-end exit 0 (forge test 80/80, ABI sync, web 150 tests, indexer 40 tests).
+  `./dev.sh` from a clean slate: fresh canonical deploy (manifest regenerated identical
+  to HEAD), `next dev` serving, fresh indexer synced to the new chain (cursor 4), and
+  the swap e2e spec passed against that stack (1 passed). Web `npm test` 150 passed,
+  lint 0 errors (16 pre-existing warnings). Reversible: revert.

@@ -3,6 +3,16 @@
 # Wallet setup: add network "Local" (chain id 31337, RPC http://127.0.0.1:8545); import an anvil test account.
 set -euo pipefail
 cd "$(dirname "$0")"
+# fail fast: export-abis.sh below needs python3 (Linux/macOS) or py (Windows);
+# each candidate is verified by running it (the Windows python3 alias never runs).
+PYTHON=""
+for cand in python3 py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys" >/dev/null 2>&1; then
+    PYTHON=$cand
+    break
+  fi
+done
+[ -n "$PYTHON" ] || { echo "Missing: python3 (or py). Install Python 3." >&2; exit 1; }
 RPC=${RPC:-http://127.0.0.1:8545}
 KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80   # anvil account #0, public test key
 cleanup() { [ -n "${ANVIL_PID:-}" ] && kill "$ANVIL_PID" 2>/dev/null || true; }

@@ -10,7 +10,16 @@ need npm "Install npm."
 need forge "Install Foundry: https://getfoundry.sh"
 need anvil "Install Foundry: https://getfoundry.sh"
 need cast "Install Foundry: https://getfoundry.sh"
-need python3 "Install Python 3 (used by the helper scripts)."
+# python3 on Linux/macOS; fall back to py (Windows). Each candidate is verified by
+# actually running it: the Windows python3 App Execution alias exists on PATH but never runs.
+PYTHON=""
+for cand in python3 py; do
+  if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys" >/dev/null 2>&1; then
+    PYTHON=$cand
+    break
+  fi
+done
+[ -n "$PYTHON" ] || { echo "Missing: python3 (or py). Install Python 3 (used by the helper scripts)." >&2; exit 1; }
 
 echo "== contracts: dependencies and tests"
 cd swapex-contracts

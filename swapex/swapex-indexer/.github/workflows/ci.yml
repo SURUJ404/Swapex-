@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: swapex/swapex-indexer
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 is the documented floor, 24 is the version the stack is verified on
+        node-version: [20, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: swapex/swapex-indexer/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
