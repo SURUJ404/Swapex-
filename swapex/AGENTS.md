@@ -5,7 +5,7 @@ Open-source, testnet-only DEX built from scratch (Uniswap-style V3 pools; V4-sty
 ## Layout
 - swapex-contracts/  Foundry. SwapexFactory, SwapexPool, SwapexRouter, SwapexQuoter, SwapexPositionManager, scripts, tests.
 - Swapex--main/      Next.js (pages router) web app. ethers v5 + web3-react v6 today, viem + wagmi planned.
-- swapex-indexer/    Event indexer + HTTP API (skeleton, to be built).
+- swapex-indexer/    Event indexer + HTTP API (log sync into SQLite, REST endpoints, vitest + tsc tests).
 - prompts/           Task prompts. Current: prompts/01-next-phase.md
 - setup.sh, dev.sh   One-command setup and local dev stack.
 
@@ -14,7 +14,10 @@ Open-source, testnet-only DEX built from scratch (Uniswap-style V3 pools; V4-sty
 - Local stack (anvil + deploy + seed + export ABIs + web): ./dev.sh
 - Contracts: cd swapex-contracts && forge test; scripts/e2e-local.sh; scripts/e2e-positions.sh
 - After any contract change: swapex-contracts/scripts/export-abis.sh ../Swapex--main
-- Web: cd Swapex--main && npm test && npm run build
+- Web: cd Swapex--main && npm ci && npm run lint && npm test && npm run build
+- Browser e2e (local stack must be running): cd Swapex--main && npm run e2e
+- Format: cd Swapex--main && npm run format
+- Indexer: cd swapex-indexer && npm test && npm run typecheck
 
 ## Rules
 1. Testnet only. No mainnet. No secrets or private keys in the repo (the public anvil dev key is allowed in local scripts only).

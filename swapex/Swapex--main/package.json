@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "@reach/dialog": "^0.18.0",
@@ -30,6 +31,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
     "jsdom": "^29.1.1",
+    "prettier": "^3.9.10",
     "tailwindcss": "^4",
     "typescript": ">=6.0 <6.1",
     "vitest": "^3.2.4"
