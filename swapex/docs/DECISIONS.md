@@ -270,3 +270,56 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   `tsc --noEmit` exit 0; the e2e deploy regenerated `deployments/31337.json` identical to HEAD.
 - **Reversal:** delete the two vitest configs, the test file and the package script; the
   `e2e-local.sh` python fix should stay either way.
+
+## 2026-10-19 - Limit-order contract + test suite (planned C1)
+
+- **Decision (shape):** `src/periphery/SwapexLimitOrders.sol` matches prompt section 4:
+  EIP-712 `Order(maker, tokenIn, tokenOut, amountIn, minAmountOut, expiry, nonce, receiver)`
+  with `chainId + verifyingContract` domain, anyone-may-fill, partial fills with a pro-rata
+  floor (`mulDiv(minAmountOut, totalFilled, amountIn)`, rounded down), cancel by maker nonce,
+  ERC-1271 via OpenZeppelin `SignatureChecker` (fresh install at `lib/openzeppelin-contracts`,
+  remapping added to `remappings.txt`), `nonReentrant` on `fill`, zero custody (input pulled
+  and swapped inside one call; the pool pays `receiver` directly).
+- **Decision (TransferHelper):** `safeTransfer`/`safeTransferFrom` now *bubble* a token's own
+  revert data instead of overwriting it with `TransferFailed`; only a bare revert or a
+  `false` return still maps to `TransferFailed`. Rationale: `TransferHelper` was masking
+  nested causes (e.g. the contract's own `Reentrancy()` from a hostile token's callback),
+  which makes the guard untestable and token errors undebuggable. No test or UI contract
+  depended on the masked form: `TransferFailed` remains in every ABI and still fires for the
+  false/bare cases (web `lib/errors.js` keeps its entry).
+- **Decision (fuzz floor buffer):** `testFuzz_partialFillsMeetTheProRataFloor` uses a
+  realistic 0.1% maker buffer instead of `minAmountOut = quote` (exact). Measured on this
+  pool (temporary probe, removed): quoter quote for a full trade equals a *single* execution
+  exactly, but a *split* execution lands 1 wei less (intermediate sqrtPrice rounding), so a
+  zero-buffer order's cumulative floor is unreachable after a chunked fill and the order
+  strands. The contract stays strict (never delivers less than `minAmountOut` pro-rata -
+  that is the maker's guarantee); a zero-buffer order being fragile is honest AMM rounding,
+  so the UI (C4) must sign orders with a buffer.
+- **Test expectations that encode real contract semantics** (do not "fix" these back):
+  `fill` checks expiry *before* the filler deadline, and `OrderAlreadyFilled` *before*
+  `InvalidSignature` (state-then-sig order); the EVM `ecrecover` precompile accepts
+  high-s signatures (protocol-level malleability is real - OZ's low-s check is the defense);
+  Solidity memory struct assignment aliases, so malformed-order cases rebuild the struct
+  per case; `TransferHelper` bubbling as above.
+- **Slither: clean-or-justified.** Run: `slither . --exclude-dependencies` (slither 0.11.6).
+  Repo baseline: 97 findings / 39 contracts (13 High; the 5 non-limit-orders Highs are
+  pre-existing in `PeripheryBase`/`FullMath`, untouched). `SwapexLimitOrders` findings,
+  all reviewed: `arbitrary-send-erc20` (High/High) - false positive: the `from` is the
+  EIP-712 signer, authorized at line 190 before any transfer, and the maker's ERC-20
+  allowance is required; `reentrancy-balance` x7 (High/Medium) - external calls sit between
+  balance reads, but the whole `fill` runs under `nonReentrant` and
+  `test_reentrancyDuringTransferIsBlocked` proves a nested `fill` reverts with `Reentrancy()`;
+  tests also assert the contract holds zero balance after every fill; `incorrect-equality`
+  (Medium/High) - the `current == value` check in `_approve` is a redundant-approve
+  short-circuit, a gas optimization rather than an invariant; `reentrancy-no-eth` (Medium) -
+  the contract has no ETH paths and is nonReentrant anyway; `timestamp` x2 (Low) -
+  expiry/deadline semantics are inherently block-based, +/-1 block is acceptable for orders;
+  informational (`assembly`, `DOMAIN_SEPARATOR` naming, low-level calls, complexity, pragma)
+  are intended as written.
+- **Verified by running:** `forge test` 104/104 (80 baseline + 24 new); the previously
+  failing fuzz seed with `--fuzz-runs 5000` green; full limit suite at `--fuzz-runs 5000`
+  green; `forge fmt` clean for the C1 files (the 15 remaining `--check` diffs are
+  pre-existing files, left untouched); `slither . --exclude-dependencies` runs and exits
+  with the justified set above.
+- **Reversal:** delete `SwapexLimitOrders.sol`, the mocks and `LimitOrders.t.sol`, revert
+  `remappings.txt` + `TransferHelper.sol`, and drop this entry's buffer rule with the UI.

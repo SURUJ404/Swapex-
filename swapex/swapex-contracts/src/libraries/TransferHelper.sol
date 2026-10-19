@@ -8,12 +8,23 @@ library TransferHelper {
 
     function safeTransfer(address token, address to, uint256 value) internal {
         (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(0xa9059cbb, to, value)); // transfer(address,uint256)
-        if (!ok || (ret.length != 0 && !abi.decode(ret, (bool)))) revert TransferFailed();
+        if (!ok) _revertWithReason(ret);
+        if (ret.length != 0 && !abi.decode(ret, (bool))) revert TransferFailed();
     }
 
     function safeTransferFrom(address token, address from, address to, uint256 value) internal {
         (bool ok, bytes memory ret) = token.call(abi.encodeWithSelector(0x23b872dd, from, to, value)); // transferFrom(address,address,uint256)
-        if (!ok || (ret.length != 0 && !abi.decode(ret, (bool)))) revert TransferFailed();
+        if (!ok) _revertWithReason(ret);
+        if (ret.length != 0 && !abi.decode(ret, (bool))) revert TransferFailed();
+    }
+
+    /// a token that reverted with its own reason keeps it: bubble the data through so callers
+    /// (reentrancy guards, custom token errors) surface the real cause; a bare revert maps to TransferFailed
+    function _revertWithReason(bytes memory ret) private pure {
+        if (ret.length == 0) revert TransferFailed();
+        assembly {
+            revert(add(ret, 0x20), mload(ret))
+        }
     }
 
     function safeTransferETH(address to, uint256 value) internal {
