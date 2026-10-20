@@ -1,30 +1,11 @@
 import React from 'react'
-import { useWeb3React } from '@web3-react/core'
 import { DialogOverlay, DialogContent } from '@reach/dialog'
 import '@reach/dialog/styles.css'
-import { injected, walletlink } from '../context/Web3Context'
-
-const wallets = [
-  {
-    id: 'injected',
-    name: 'MetaMask',
-    description: 'Connect using browser extension',
-    icon: '/images/wallets/metamask.png',
-    connector: injected,
-    color: '#E8831D',
-  },
-  {
-    id: 'walletlink',
-    name: 'Coinbase Wallet',
-    description: 'Use Coinbase Wallet app',
-    icon: '/images/wallets/coinbase.svg',
-    connector: walletlink,
-    color: '#315CF5',
-  },
-]
+import { useWeb3 } from '../context/Web3Context'
+import { WALLETS } from '../lib/wagmi'
 
 export default function WalletModal({ isOpen, onClose }) {
-  const { activate } = useWeb3React()
+  const { connectWallet } = useWeb3()
 
   return (
     <DialogOverlay
@@ -50,11 +31,11 @@ export default function WalletModal({ isOpen, onClose }) {
         </div>
 
         <div className="space-y-2">
-          {wallets.map((wallet) => (
+          {WALLETS.map((wallet) => (
             <button
               key={wallet.id}
               onClick={() => {
-                activate(wallet.connector)
+                connectWallet(wallet.id)
                 onClose()
               }}
               className="w-full flex items-center gap-4 p-3 rounded-xl bg-[var(--bg-secondary)] border border-[var(--border)] hover:border-[var(--accent)] transition-all text-left group"

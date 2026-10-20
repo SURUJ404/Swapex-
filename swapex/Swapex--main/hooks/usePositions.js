@@ -10,14 +10,14 @@ import { getHealth, getPositions, indexerConfigured } from '../lib/indexerApi'
 import { discoverPositionIds, positionIdsFromRows } from '../lib/positionSource'
 
 /** Everything the UI needs about one position NFT, in one place. */
-export async function loadPosition(library, tokenId) {
-  const [owner, p] = await Promise.all([ownerOf(library, tokenId), position(library, tokenId)])
+export async function loadPosition(client, tokenId) {
+  const [owner, p] = await Promise.all([ownerOf(client, tokenId), position(client, tokenId)])
   const [token0, token1, poolAddress] = await Promise.all([
-    getTokenMeta(library, p.token0),
-    getTokenMeta(library, p.token1),
-    getPool(library, p.token0, p.token1, p.fee),
+    getTokenMeta(client, p.token0),
+    getTokenMeta(client, p.token1),
+    getPool(client, p.token0, p.token1, p.fee),
   ])
-  const s0 = await slot0(library, poolAddress)
+  const s0 = await slot0(client, poolAddress)
   const sqrtPriceX96 = s0.sqrtPriceX96.toString()
   const currentTick = Number(s0.tick)
   return {
@@ -51,7 +51,8 @@ export async function loadPosition(library, tokenId) {
  * never surface a position the account does not own.
  */
 export default function usePositions() {
-  const { account, library, wrongNetwork } = useWeb3()
+  const { account, clients, wrongNetwork } = useWeb3()
+  const publicClient = clients.public
   const [positions, setPositions] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -68,10 +69,13 @@ export default function usePositions() {
     return { ids: positionIdsFromRows(rows), gapFrom: health.cursor }
   }, [])
 
-  const fromEvents = useCallback((owner, fromBlock) => positionIdsTransferredTo(library, owner, fromBlock), [library])
+  const fromEvents = useCallback(
+    (owner, fromBlock) => positionIdsTransferredTo(publicClient, owner, fromBlock),
+    [publicClient]
+  )
 
   const refetch = useCallback(async () => {
-    if (!DEPLOYMENT || !account || !library || wrongNetwork) {
+    if (!DEPLOYMENT || !account || !publicClient || wrongNetwork) {
       setPositions([])
       return
     }
@@ -79,8 +83,8 @@ export default function usePositions() {
     setError(null)
     try {
       const { ids } = await discoverPositionIds(account, { fromIndexer, fromEvents })
-      const owned = await ownedTokenIds(library, account, ids)
-      const loaded = await Promise.all(owned.map((id) => loadPosition(library, id)))
+      const owned = await ownedTokenIds(publicClient, account, ids)
+      const loaded = await Promise.all(owned.map((id) => loadPosition(publicClient, id)))
       loaded.sort((a, b) => Number(b.id) - Number(a.id))
       setPositions(loaded)
     } catch (e) {
@@ -88,7 +92,7 @@ export default function usePositions() {
     } finally {
       setLoading(false)
     }
-  }, [account, library, wrongNetwork, fromIndexer, fromEvents])
+  }, [account, publicClient, wrongNetwork, fromIndexer, fromEvents])
 
   useEffect(() => {
     Promise.resolve()

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { utils } from 'ethers'
+import { parseEther, formatUnits } from 'viem'
 import { useWeb3 } from '../context/Web3Context'
 import Skeleton from './Skeleton'
 import { exactInput, multicall, encodeExactInput, encodeUnwrapWETH9, ADDRESS_THIS } from '../lib/contracts/router'
@@ -24,7 +24,7 @@ import { DEFAULT_SLIPPAGE_BPS, DEFAULT_DEADLINE_MINUTES, HIGH_PRICE_IMPACT, DEPL
 
 const ROUTER_ADDRESS = DEPLOYMENT?.router
 
-const GAS_RESERVE = utils.parseEther('0.01') // kept back by MAX when paying with ETH
+const GAS_RESERVE = parseEther('0.01') // kept back by MAX when paying with ETH
 const QUOTE_REFRESH_MS = 15000
 
 export default function SwapWidget() {
@@ -35,7 +35,8 @@ export default function SwapWidget() {
 }
 
 function SwapForm() {
-  const { account, library } = useWeb3()
+  const { account, clients } = useWeb3()
+  const publicClient = clients.public
   const { run, pending: swapping } = useTransact()
   const { approve, approving } = useApprove()
 
@@ -70,14 +71,14 @@ function SwapForm() {
 
   // Quote: debounced, and results from superseded requests are discarded.
   useEffect(() => {
-    if (!library || !amountIn || sameToken) {
+    if (!publicClient || !amountIn || sameToken) {
       Promise.resolve()
         .then(() => {
           setRoute(null)
           setQuoting(false)
         })
         .catch(() => {})
-      return
+      return undefined
     }
     let cancelled = false
     Promise.resolve()
@@ -87,7 +88,7 @@ function SwapForm() {
       .catch(() => {})
     const timer = setTimeout(async () => {
       try {
-        const best = await findBestRoute(library, inputToken, outputToken, amountIn)
+        const best = await findBestRoute(publicClient, inputToken, outputToken, amountIn)
         if (!cancelled) setRoute(best)
       } catch {
         if (!cancelled) setRoute(null)
@@ -99,11 +100,11 @@ function SwapForm() {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [library, amountIn, inputToken, outputToken, sameToken, quoteTick])
+  }, [publicClient, amountIn, inputToken, outputToken, sameToken, quoteTick])
 
   const amountOut = route?.amountOut
   const minReceived = amountOut ? minAfterSlippage(amountOut, slippageBps) : null
-  const insufficientBalance = amountIn ? amountIn.gt(inputBalance) : false
+  const insufficientBalance = amountIn ? amountIn > inputBalance : false
   const mustApprove = Boolean(route) && needsApproval(amountIn)
   const highImpact = route?.impact != null && route.impact >= HIGH_PRICE_IMPACT
 
@@ -111,9 +112,8 @@ function SwapForm() {
     approve(inputToken, ROUTER_ADDRESS, amountIn, allowance, refetchAllowance)
 
   const swap = async () => {
-    if (!account || !library || !amountIn || !route) return null
-    const signer = library.getSigner()
-    const deadline = deadlineFromNow(deadlineMin)
+    if (!account || !clients.wallet || !amountIn || !route) return null
+    const deadline = BigInt(deadlineFromNow(deadlineMin))
     const min = minReceived
     const params = (recipient) => ({
       path: route.path,
@@ -128,10 +128,10 @@ function SwapForm() {
       send: () => {
         if (outputToken.address === 'NATIVE') {
           // swap into the router as WETH, then unwrap to ETH for the user, in one transaction
-          return multicall(signer, [encodeExactInput(params(ADDRESS_THIS)), encodeUnwrapWETH9(min, account)])
+          return multicall(clients.wallet, [encodeExactInput(params(ADDRESS_THIS)), encodeUnwrapWETH9(min, account)])
         }
         const overrides = inputToken.address === 'NATIVE' ? { value: amountIn } : {}
-        return exactInput(signer, params(account), overrides)
+        return exactInput(clients.wallet, params(account), overrides)
       },
       onSuccess: () => {
         setInputAmount('')
@@ -146,8 +146,8 @@ function SwapForm() {
   const openConfirm = () => {
     if (!route) return
     setShowConfirm(true)
-    if (library && route.gasEstimate && gasPrice == null) {
-      library
+    if (publicClient && route.gasEstimate && gasPrice == null) {
+      publicClient
         .getGasPrice()
         .then(setGasPrice)
         .catch(() => setGasPrice(null))
@@ -163,8 +163,8 @@ function SwapForm() {
 
   const setMax = () => {
     let max = inputBalance
-    if (inputToken.address === 'NATIVE') max = max.gt(GAS_RESERVE) ? max.sub(GAS_RESERVE) : max.mul(0)
-    setInputAmount(utils.formatUnits(max, inputToken.decimals))
+    if (inputToken.address === 'NATIVE') max = max > GAS_RESERVE ? max - GAS_RESERVE : 0n
+    setInputAmount(formatUnits(max, inputToken.decimals))
   }
 
   let status = null

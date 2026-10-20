@@ -1,19 +1,20 @@
 // PositionManager reads and writes (the NFT position manager owns all pool positions).
-import { BigNumber } from 'ethers'
-import { getInterface, contractAt, ADDRESS_THIS } from './client'
+import { encodeFunctionData } from 'viem'
+import { coreContract, abiFor, ADDRESS_THIS } from './client'
 
 export { ADDRESS_THIS }
-export const MAX_UINT128 = BigNumber.from(2).pow(128).sub(1)
+export const MAX_UINT128 = (1n << 128n) - 1n
 
-const pmInterface = () => getInterface('positionManager')
+const pm = () => coreContract('positionManager')
+const encode = (functionName, args) => encodeFunctionData({ abi: abiFor('positionManager'), functionName, args })
 
-// ---- reads
-export function ownerOf(library, tokenId) {
-  return contractAt('positionManager', library).ownerOf(tokenId)
+// ---- reads (tokenId accepts a string or bigint; uint256 args must be bigints for viem)
+export function ownerOf(client, tokenId) {
+  return client.readContract({ ...pm(), functionName: 'ownerOf', args: [BigInt(tokenId)] })
 }
 
-export async function position(library, tokenId) {
-  const p = await contractAt('positionManager', library).positions(tokenId)
+export async function position(client, tokenId) {
+  const p = await client.readContract({ ...pm(), functionName: 'positions', args: [BigInt(tokenId)] })
   return {
     token0: p.token0,
     token1: p.token1,
@@ -26,78 +27,83 @@ export async function position(library, tokenId) {
   }
 }
 
-export function balanceOf(library, owner) {
-  return contractAt('positionManager', library).balanceOf(owner)
+export function balanceOf(client, owner) {
+  return client.readContract({ ...pm(), functionName: 'balanceOf', args: [owner] })
 }
 
-export function nextTokenId(library) {
-  return contractAt('positionManager', library).nextTokenId()
+export function nextTokenId(client) {
+  return client.readContract({ ...pm(), functionName: 'nextTokenId' })
 }
 
-// ---- writes (return the transaction)
-export function mint(signer, params, overrides) {
-  return contractAt('positionManager', signer).mint(params, overrides || {})
+// ---- writes (return the tx hash)
+export function mint(wallet, params) {
+  return wallet.writeContract({ ...pm(), functionName: 'mint', args: [params] })
 }
 
-export function increaseLiquidity(signer, params, overrides) {
-  return contractAt('positionManager', signer).increaseLiquidity(params, overrides || {})
+export function increaseLiquidity(wallet, params) {
+  return wallet.writeContract({ ...pm(), functionName: 'increaseLiquidity', args: [params] })
 }
 
-export function decreaseLiquidity(signer, params, overrides) {
-  return contractAt('positionManager', signer).decreaseLiquidity(params, overrides || {})
+export function decreaseLiquidity(wallet, params) {
+  return wallet.writeContract({ ...pm(), functionName: 'decreaseLiquidity', args: [params] })
 }
 
-/** Collect fees (or full balances with MAX_UINT128). Returns the transaction. */
-export function collect(signer, params, overrides) {
-  return contractAt('positionManager', signer).collect(params, overrides || {})
+/** Collect fees (or full balances with MAX_UINT128). Returns the tx hash. */
+export function collect(wallet, params) {
+  return wallet.writeContract({ ...pm(), functionName: 'collect', args: [params] })
 }
 
 /** Burn an emptied position NFT. */
-export function burn(signer, tokenId, overrides) {
-  return contractAt('positionManager', signer).burn(tokenId, overrides || {})
+export function burn(wallet, tokenId) {
+  return wallet.writeContract({ ...pm(), functionName: 'burn', args: [BigInt(tokenId)] })
 }
 
-export function createAndInitializePoolIfNecessary(signer, token0, token1, fee, sqrtPriceX96, overrides) {
-  return contractAt('positionManager', signer).createAndInitializePoolIfNecessary(token0, token1, fee, sqrtPriceX96, overrides || {})
+export function createAndInitializePoolIfNecessary(wallet, token0, token1, fee, sqrtPriceX96, overrides) {
+  return wallet.writeContract({
+    ...pm(),
+    functionName: 'createAndInitializePoolIfNecessary',
+    args: [token0, token1, fee, sqrtPriceX96],
+    value: overrides?.value,
+  })
 }
 
-export function multicall(signer, calls, overrides) {
-  return contractAt('positionManager', signer).multicall(calls, overrides || {})
+export function multicall(wallet, calls, overrides) {
+  return wallet.writeContract({ ...pm(), functionName: 'multicall', args: [calls], value: overrides?.value })
 }
 
 // ---- encodings for multicall composition
 export function encodeMint(params) {
-  return pmInterface().encodeFunctionData('mint', [params])
+  return encode('mint', [params])
 }
 
 export function encodeIncreaseLiquidity(params) {
-  return pmInterface().encodeFunctionData('increaseLiquidity', [params])
+  return encode('increaseLiquidity', [params])
 }
 
 export function encodeDecreaseLiquidity(params) {
-  return pmInterface().encodeFunctionData('decreaseLiquidity', [params])
+  return encode('decreaseLiquidity', [params])
 }
 
 export function encodeCollect(params) {
-  return pmInterface().encodeFunctionData('collect', [params])
+  return encode('collect', [params])
 }
 
 export function encodeBurn(tokenId) {
-  return pmInterface().encodeFunctionData('burn', [tokenId])
+  return encode('burn', [tokenId])
 }
 
 export function encodeUnwrapWETH9(amountMinimum, recipient) {
-  return pmInterface().encodeFunctionData('unwrapWETH9', [amountMinimum, recipient])
+  return encode('unwrapWETH9', [amountMinimum, recipient])
 }
 
 export function encodeSweepToken(token, amountMinimum, recipient) {
-  return pmInterface().encodeFunctionData('sweepToken', [token, amountMinimum, recipient])
+  return encode('sweepToken', [token, amountMinimum, recipient])
 }
 
 export function encodeRefundETH() {
-  return pmInterface().encodeFunctionData('refundETH', [])
+  return encode('refundETH', [])
 }
 
 export function encodeCreateAndInitializePoolIfNecessary(token0, token1, fee, sqrtPriceX96) {
-  return pmInterface().encodeFunctionData('createAndInitializePoolIfNecessary', [token0, token1, fee, sqrtPriceX96])
+  return encode('createAndInitializePoolIfNecessary', [token0, token1, fee, sqrtPriceX96])
 }

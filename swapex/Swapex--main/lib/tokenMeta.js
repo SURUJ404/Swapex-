@@ -4,7 +4,7 @@ import { findToken, tokenLogo } from './tokens'
 const cache = new Map()
 
 /** { address, symbol, name, decimals, logo } for any ERC-20, using the known list first. */
-export async function getTokenMeta(library, address) {
+export async function getTokenMeta(client, address) {
   const known = findToken(address)
   if (known) return known
   const key = address.toLowerCase()
@@ -12,7 +12,7 @@ export async function getTokenMeta(library, address) {
   let symbol = 'TOKEN'
   let decimals = 18
   try {
-    ;[symbol, decimals] = await Promise.all([erc20Symbol(library, address), erc20Decimals(library, address)])
+    ;[symbol, decimals] = await Promise.all([erc20Symbol(client, address), erc20Decimals(client, address)])
   } catch {
     // non-standard token: keep the defaults rather than failing the whole screen
   }

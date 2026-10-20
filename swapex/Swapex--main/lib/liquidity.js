@@ -49,7 +49,7 @@ export function amountsForLiquidity(sqrtPrice, tickLower, tickUpper, liquidity) 
   }
 }
 
-/** Number (raw units, non-negative) -> integer decimal string safe for BigNumber.from. */
+/** Number (raw units, non-negative) -> integer decimal string safe for BigInt(). */
 export function toIntegerString(x) {
   if (!Number.isFinite(x) || x < 0) throw new Error('Invalid amount')
   return BigInt(Math.floor(x)).toString()

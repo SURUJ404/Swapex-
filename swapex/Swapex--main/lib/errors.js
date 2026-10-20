@@ -1,4 +1,5 @@
-import { getInterface } from './contracts/client'
+import { decodeErrorResult } from 'viem'
+import { abiFor } from './contracts/client'
 
 // Custom errors the Swapex contracts can revert with, in plain language.
 const CONTRACT_ERRORS = {
@@ -18,8 +19,8 @@ const CONTRACT_ERRORS = {
   NotAuthorized: 'You are not allowed to manage this position.',
 }
 
-// Interfaces come from the adapter layer (deduped ABIs, single source of truth).
-const IFACES = ['router', 'positionManager', 'quoter'].map((name) => getInterface(name))
+// ABIs come from the adapter layer (deduped, single source of truth).
+const ERROR_ABIS = ['router', 'positionManager', 'quoter'].map((name) => abiFor(name))
 
 function revertData(e) {
   const candidates = [e?.data, e?.error?.data, e?.error?.error?.data, e?.data?.data, e?.error?.data?.data]
@@ -30,9 +31,9 @@ function revertData(e) {
 export function decodeContractError(e) {
   const data = revertData(e)
   if (!data) return null
-  for (const iface of IFACES) {
+  for (const abi of ERROR_ABIS) {
     try {
-      return iface.parseError(data).name
+      return decodeErrorResult({ abi, data }).abiItem.name
     } catch {
       // not this contract's error
     }
@@ -46,11 +47,11 @@ export function parseError(e, fallback = 'Transaction failed') {
   const named = decodeContractError(e)
   if (named && CONTRACT_ERRORS[named]) return CONTRACT_ERRORS[named]
   const code = e.code
-  const raw = [e.reason, e.data?.message, e.error?.message, e.message, String(e)]
+  const raw = [e.reason, e.shortMessage, e.details, e.data?.message, e.error?.message, e.message, String(e)]
     .filter(Boolean)
     .join(' | ')
 
-  if (code === 4001 || code === 'ACTION_REJECTED' || /user (rejected|denied)/i.test(raw)) {
+  if (code === 4001 || code === 'ACTION_REJECTED' || /user (rejected|denied)|UserRejectedRequestError/i.test(raw)) {
     return 'Transaction rejected in your wallet'
   }
   if (/INSUFFICIENT_OUTPUT_AMOUNT|Too little received/i.test(raw)) {
@@ -67,15 +68,15 @@ export function parseError(e, fallback = 'Transaction failed') {
   if (/TRANSFER_FROM_FAILED|transfer amount exceeds allowance|insufficient allowance/i.test(raw)) {
     return 'Token approval is missing or too low. Approve the token and retry.'
   }
-  if (/insufficient funds/i.test(raw) || code === 'INSUFFICIENT_FUNDS') {
+  if (/insufficient funds|InsufficientBalanceError/i.test(raw) || code === 'INSUFFICIENT_FUNDS') {
     return 'Not enough ETH to cover the amount plus network fee.'
   }
-  if (code === 'UNPREDICTABLE_GAS_LIMIT') {
+  if (code === 'UNPREDICTABLE_GAS_LIMIT' || /ContractFunctionExecutionError|estimateGas/i.test(raw)) {
     return 'This transaction would fail on-chain (simulation reverted). Check amounts and slippage.'
   }
-  if (code === 'NETWORK_ERROR' || /network (changed|error)/i.test(raw)) {
+  if (code === 'NETWORK_ERROR' || /network (changed|error)|HttpRequestError/i.test(raw)) {
     return 'Network error. Check your connection and wallet network.'
   }
-  const msg = e.reason || e.message || fallback
+  const msg = e.reason || e.shortMessage || e.message || fallback
   return msg.length > 140 ? `${msg.slice(0, 137)}...` : msg
 }

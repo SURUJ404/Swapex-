@@ -1,29 +1,29 @@
 import { describe, it, expect } from 'vitest'
-import { utils, BigNumber } from 'ethers'
+import { parseUnits, parseGwei } from 'viem'
 import { formatRate, impactPercent, needsExtraConfirm, feeEstimateWei, feeEstimateEth } from '../lib/review'
 
 describe('formatRate', () => {
   it('formats a 1:1 rate across equal decimals', () => {
-    const one = utils.parseUnits('1', 18)
+    const one = parseUnits('1', 18)
     expect(formatRate(one, 18, one, 18)).toBe('1')
   })
 
   it('scales across different decimals (18 -> 6)', () => {
-    const inAmt = utils.parseUnits('2', 18)
-    const outAmt = utils.parseUnits('10', 6) // 10 USDC per 2 TOKEN => 5 per 1
+    const inAmt = parseUnits('2', 18)
+    const outAmt = parseUnits('10', 6) // 10 USDC per 2 TOKEN => 5 per 1
     expect(formatRate(inAmt, 18, outAmt, 6)).toBe('5')
   })
 
   it('keeps fractional precision', () => {
-    const inAmt = utils.parseUnits('3', 18)
-    const outAmt = utils.parseUnits('10', 18)
+    const inAmt = parseUnits('3', 18)
+    const outAmt = parseUnits('10', 18)
     expect(formatRate(inAmt, 18, outAmt, 18)).toBe('3.33333333')
   })
 
   it('returns null for zero or missing inputs', () => {
-    expect(formatRate(BigNumber.from(0), 18, BigNumber.from(1), 18)).toBeNull()
-    expect(formatRate(null, 18, BigNumber.from(1), 18)).toBeNull()
-    expect(formatRate(BigNumber.from(1), 18, null, 18)).toBeNull()
+    expect(formatRate(0n, 18, 1n, 18)).toBeNull()
+    expect(formatRate(null, 18, 1n, 18)).toBeNull()
+    expect(formatRate(1n, 18, null, 18)).toBeNull()
   })
 })
 
@@ -55,21 +55,21 @@ describe('needsExtraConfirm', () => {
 
 describe('feeEstimate', () => {
   it('multiplies gasEstimate by gasPrice', () => {
-    const gas = BigNumber.from(150000)
-    const price = utils.parseUnits('1', 'gwei')
-    expect(feeEstimateWei(gas, price).toString()).toBe(utils.parseUnits('0.00015', 18).toString())
+    const gas = 150000n
+    const price = parseGwei('1')
+    expect(feeEstimateWei(gas, price).toString()).toBe(parseUnits('0.00015', 18).toString())
   })
 
   it('formats as a short ETH string', () => {
-    const gas = BigNumber.from(21000)
-    const price = utils.parseUnits('10', 'gwei')
+    const gas = 21000n
+    const price = parseGwei('10')
     expect(feeEstimateEth(gas, price)).toBe('0.00021')
   })
 
   it('returns null when either side is missing or invalid', () => {
-    expect(feeEstimateWei(null, BigNumber.from(1))).toBeNull()
-    expect(feeEstimateWei(BigNumber.from(1), null)).toBeNull()
-    expect(feeEstimateWei('not-a-number', BigNumber.from(1))).toBeNull()
-    expect(feeEstimateEth(null, BigNumber.from(1))).toBeNull()
+    expect(feeEstimateWei(null, 1n)).toBeNull()
+    expect(feeEstimateWei(1n, null)).toBeNull()
+    expect(feeEstimateWei('not-a-number', 1n)).toBeNull()
+    expect(feeEstimateEth(null, 1n)).toBeNull()
   })
 })

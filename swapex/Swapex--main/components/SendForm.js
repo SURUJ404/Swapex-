@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react'
-import { utils } from 'ethers'
+import { isAddress, parseEther, formatUnits } from 'viem'
 import { useWeb3 } from '../context/Web3Context'
 import { transfer } from '../lib/contracts/erc20'
 import { TOKENS as TOKEN_LIST } from '../lib/tokens'
@@ -9,10 +9,10 @@ import useTokenBalance from '../hooks/useTokenBalance'
 import useTransact from '../hooks/useTransact'
 import { parseAmount, formatAmount } from '../lib/amounts'
 
-const GAS_RESERVE = utils.parseEther('0.01')
+const GAS_RESERVE = parseEther('0.01')
 
 export default function SendForm() {
-  const { account, library } = useWeb3()
+  const { account, clients } = useWeb3()
   const { run, pending: loading } = useTransact()
 
   const [selectedToken, setSelectedToken] = useState(TOKEN_LIST[0])
@@ -22,29 +22,28 @@ export default function SendForm() {
 
   const { balance, refetch } = useTokenBalance(selectedToken)
   const amountBn = useMemo(() => parseAmount(amount, selectedToken.decimals), [amount, selectedToken])
-  const validRecipient = utils.isAddress(recipient)
+  const validRecipient = isAddress(recipient)
 
   const setMax = () => {
     let max = balance
-    if (selectedToken.address === 'NATIVE') max = max.gt(GAS_RESERVE) ? max.sub(GAS_RESERVE) : max.mul(0)
-    setAmount(utils.formatUnits(max, selectedToken.decimals))
+    if (selectedToken.address === 'NATIVE') max = max > GAS_RESERVE ? max - GAS_RESERVE : 0n
+    setAmount(formatUnits(max, selectedToken.decimals))
   }
 
   let status = null
   if (!validRecipient) status = recipient ? 'Invalid recipient address' : 'Enter a recipient'
   else if (!amountBn) status = 'Enter an amount'
-  else if (amountBn.gt(balance)) status = `Insufficient ${selectedToken.symbol} balance`
+  else if (amountBn > balance) status = `Insufficient ${selectedToken.symbol} balance`
 
   const send = async () => {
-    if (!account || !library || !amountBn || !validRecipient) return
-    const signer = library.getSigner()
+    if (!account || !clients.wallet || !amountBn || !validRecipient) return
     await run({
       label: `Send ${selectedToken.symbol}`,
       successMessage: `Sent ${formatAmount(amountBn, selectedToken.decimals)} ${selectedToken.symbol} to ${recipient.slice(0, 6)}...`,
       send: () =>
         selectedToken.address === 'NATIVE'
-          ? signer.sendTransaction({ to: recipient, value: amountBn })
-          : transfer(signer, selectedToken.address, recipient, amountBn),
+          ? clients.wallet.sendTransaction({ to: recipient, value: amountBn })
+          : transfer(clients.wallet, selectedToken.address, recipient, amountBn),
       onSuccess: () => {
         setAmount('')
         setRecipient('')

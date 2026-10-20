@@ -7,10 +7,10 @@ import { addTransaction, setTransactionStatus } from '../lib/txHistory'
 /**
  * Runs a transaction-sending function with consistent behavior:
  * pending entry in history, wait for receipt, status update, friendly errors.
- * `send` must return the ethers TransactionResponse.
+ * `send` must return the transaction hash (viem writeContract / sendTransaction result).
  */
 export default function useTransact() {
-  const { account, chainId } = useWeb3()
+  const { account, chainId, clients } = useWeb3()
   const { addToast } = useToast()
   const [pending, setPending] = useState(false)
 
@@ -19,19 +19,18 @@ export default function useTransact() {
       setPending(true)
       let hash
       try {
-        const tx = await send()
-        hash = tx.hash
+        hash = await send()
         addTransaction(chainId, account, { hash, label })
-        const receipt = await tx.wait()
-        if (receipt.status === 0) throw new Error('Transaction reverted on-chain')
+        const receipt = await clients.public.waitForTransactionReceipt({ hash })
+        if (receipt.status === 'reverted') throw new Error('Transaction reverted on-chain')
         setTransactionStatus(chainId, account, hash, 'confirmed')
         addToast(successMessage || `${label} confirmed`, 'success')
         if (onSuccess) await onSuccess(receipt)
         return receipt
       } catch (e) {
         if (hash) {
-          // replaced (speed-up/cancel) txs surface as errors with a replacement receipt
-          if (e.replacement && e.receipt?.status === 1) {
+          // replaced (speed-up/cancel) txs surface as TransactionReplacementError with a receipt
+          if (e?.name === 'TransactionReplacementError' && e.receipt?.status === 'success') {
             setTransactionStatus(chainId, account, hash, 'confirmed')
             addToast(successMessage || `${label} confirmed`, 'success')
             if (onSuccess) await onSuccess(e.receipt)
@@ -45,7 +44,7 @@ export default function useTransact() {
         setPending(false)
       }
     },
-    [account, chainId, addToast]
+    [account, chainId, clients, addToast]
   )
 
   return { run, pending }

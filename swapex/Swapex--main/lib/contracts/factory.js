@@ -1,28 +1,31 @@
 // Factory reads and the pool reads the UI needs (slot0 / liquidity / identity).
-import { contractAt, contractFor, ZERO_ADDRESS } from './client'
+import { coreContract, contractFor, readNamed, ZERO_ADDRESS } from './client'
 
-export function getPool(library, tokenA, tokenB, fee) {
-  return contractAt('factory', library).getPool(tokenA, tokenB, fee)
+const factory = () => coreContract('factory')
+const poolAt = (pool) => contractFor('pool', pool)
+
+export function getPool(client, tokenA, tokenB, fee) {
+  return client.readContract({ ...factory(), functionName: 'getPool', args: [tokenA, tokenB, fee] })
 }
 
-export function feeAmountTickSpacing(library, fee) {
-  return contractAt('factory', library).feeAmountTickSpacing(fee)
+export function feeAmountTickSpacing(client, fee) {
+  return client.readContract({ ...factory(), functionName: 'feeAmountTickSpacing', args: [fee] })
 }
 
-export function slot0(library, pool) {
-  return contractFor('pool', pool, library).slot0()
+export function slot0(client, pool) {
+  return readNamed(client, poolAt(pool), 'slot0')
 }
 
-export function liquidity(library, pool) {
-  return contractFor('pool', pool, library).liquidity()
+export function liquidity(client, pool) {
+  return client.readContract({ ...poolAt(pool), functionName: 'liquidity' })
 }
 
-export function tickSpacing(library, pool) {
-  return contractFor('pool', pool, library).tickSpacing()
+export function tickSpacing(client, pool) {
+  return client.readContract({ ...poolAt(pool), functionName: 'tickSpacing' })
 }
 
 /** Pool address or null when the pair/fee has no pool. */
-export async function findPool(library, tokenA, tokenB, fee) {
-  const address = await getPool(library, tokenA, tokenB, fee)
+export async function findPool(client, tokenA, tokenB, fee) {
+  const address = await getPool(client, tokenA, tokenB, fee)
   return address === ZERO_ADDRESS ? null : address
 }

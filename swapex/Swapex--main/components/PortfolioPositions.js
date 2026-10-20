@@ -54,7 +54,7 @@ export default function PortfolioPositions() {
                   </span>
                   <span className="text-xs px-2 py-0.5 rounded-full bg-[var(--bg-secondary)] text-[var(--text-secondary)]">{p.fee / 10000}%</span>
                 </div>
-                <RangeBadge inRange={p.inRange} empty={p.liquidity.isZero()} />
+                <RangeBadge inRange={p.inRange} empty={p.liquidity === 0n} />
               </div>
               <div className="mt-2 text-xs text-[var(--text-tertiary)] font-mono">
                 #{p.id} · {rangeLabel(p)}

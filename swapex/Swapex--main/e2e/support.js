@@ -4,7 +4,7 @@ const ANVIL = 'http://127.0.0.1:8545'
 const INDEXER = 'http://127.0.0.1:4000'
 export const ACCOUNT0 = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'
 
-// The app connects through web3-react's InjectedConnector (window.ethereum).
+// The app connects through wagmi's injected connector (window.ethereum).
 // This shim proxies every JSON-RPC call to the local anvil node; anvil has the
 // dev accounts unlocked, so eth_sendTransaction works without in-browser
 // signing. The app's CSP (connect-src 'self' https: wss: <indexer>) blocks a
@@ -54,8 +54,7 @@ const providerShim = () => {
       listeners[event] = (listeners[event] || []).filter((f) => f !== fn)
     },
     remove: () => {},
-    // web3-react v6 InjectedConnector calls the legacy send('method') API,
-    // not request(); parseSendReturn() reads `.result` off the response.
+    // legacy send()/enable() kept for wallet libs that still call them; wagmi uses request().
     send: async (target, params) => {
       const method = typeof target === 'string' ? target : target?.method
       if (!method) throw new Error('send: no method')

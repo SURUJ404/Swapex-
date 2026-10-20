@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/router'
-import { BigNumber } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
 import Skeleton from './Skeleton'
 import {
@@ -36,7 +35,7 @@ export default function PositionDetail({ tokenId }) {
 }
 
 function bnToNumber(bn) {
-  return Number(BigNumber.from(bn).toString())
+  return Number(bn)
 }
 
 function Row({ k, v }) {
@@ -50,7 +49,8 @@ function Row({ k, v }) {
 
 function Detail({ tokenId }) {
   const router = useRouter()
-  const { account, library } = useWeb3()
+  const { account, clients } = useWeb3()
+  const publicClient = clients.public
   const { run, pending } = useTransact()
   const { approve, approving } = useApprove()
 
@@ -63,14 +63,14 @@ function Detail({ tokenId }) {
   const [deadlineMin, setDeadlineMin] = useState(DEFAULT_DEADLINE_MINUTES)
 
   const refetch = useCallback(async () => {
-    if (!library || tokenId == null) return
+    if (!publicClient || tokenId == null) return
     try {
       setError(null)
-      setPos(await loadPosition(library, tokenId))
+      setPos(await loadPosition(publicClient, tokenId))
     } catch (e) {
       setError(e)
     }
-  }, [library, tokenId])
+  }, [publicClient, tokenId])
 
   useEffect(() => {
     Promise.resolve()
@@ -94,7 +94,7 @@ function Detail({ tokenId }) {
     [pos, sqrtP]
   )
 
-  const removeLiquidity = pos ? pos.liquidity.mul(percent).div(100) : null
+  const removeLiquidity = pos ? (pos.liquidity * BigInt(percent)) / 100n : null
   const removeEst = useMemo(
     () => (pos && removeLiquidity ? amountsForLiquidity(sqrtP, pos.tickLower, pos.tickUpper, bnToNumber(removeLiquidity)) : null),
     [pos, sqrtP, removeLiquidity]
@@ -106,34 +106,34 @@ function Detail({ tokenId }) {
     run({
       label: `Collect fees #${pos.id}`,
       successMessage: 'Fees collected',
-      send: () => pmCollect(library.getSigner(), { tokenId: pos.id, recipient: account, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }),
+      send: () =>
+        pmCollect(clients.wallet, { tokenId: BigInt(pos.id), recipient: account, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }),
       onSuccess: refetch,
     })
 
   const remove = () => {
-    const signer = library.getSigner()
     const calls = [
       encodeDecreaseLiquidity({
-        tokenId: pos.id,
+        tokenId: BigInt(pos.id),
         liquidity: removeLiquidity,
-        amount0Min: minAfterSlippage(BigNumber.from(toIntegerString(removeEst.amount0)), slippageBps),
-        amount1Min: minAfterSlippage(BigNumber.from(toIntegerString(removeEst.amount1)), slippageBps),
-        deadline: deadlineFromNow(deadlineMin),
+        amount0Min: minAfterSlippage(BigInt(toIntegerString(removeEst.amount0)), slippageBps),
+        amount1Min: minAfterSlippage(BigInt(toIntegerString(removeEst.amount1)), slippageBps),
+        deadline: BigInt(deadlineFromNow(deadlineMin)),
       }),
     ]
     if (receiveEth && hasWeth) {
       // collect into the contract, then turn WETH into ETH and send the other token on
-      calls.push(encodeCollect({ tokenId: pos.id, recipient: ADDRESS_THIS, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }))
-      calls.push(encodeUnwrapWETH9(0, account))
+      calls.push(encodeCollect({ tokenId: BigInt(pos.id), recipient: ADDRESS_THIS, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }))
+      calls.push(encodeUnwrapWETH9(0n, account))
       const other = pos.token0.address.toLowerCase() === WETH_ADDRESS.toLowerCase() ? pos.token1.address : pos.token0.address
-      calls.push(encodeSweepToken(other, 0, account))
+      calls.push(encodeSweepToken(other, 0n, account))
     } else {
-      calls.push(encodeCollect({ tokenId: pos.id, recipient: account, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }))
+      calls.push(encodeCollect({ tokenId: BigInt(pos.id), recipient: account, amount0Max: MAX_UINT128, amount1Max: MAX_UINT128 }))
     }
     return run({
       label: `Remove ${percent}% of #${pos.id}`,
       successMessage: 'Liquidity removed',
-      send: () => pmMulticall(signer, calls),
+      send: () => pmMulticall(clients.wallet, calls),
       onSuccess: refetch,
     })
   }
@@ -144,25 +144,25 @@ function Detail({ tokenId }) {
     if (!pos || !raw0 || pos.currentTick >= pos.tickUpper) return null
     return amountsForDeposit(sqrtP, pos.tickLower, pos.tickUpper, { token: 0, amount: bnToNumber(raw0) })
   }, [pos, raw0, sqrtP])
-  const need1 = addPrediction ? BigNumber.from(toIntegerString(addPrediction.amount1)) : BigNumber.from(0)
+  const need1 = addPrediction ? BigInt(toIntegerString(addPrediction.amount1)) : 0n
   const canAdd = Boolean(addPrediction)
-  const insufficient0 = raw0 && raw0.gt(bal0.balance)
-  const insufficient1 = need1.gt(bal1.balance)
+  const insufficient0 = raw0 && raw0 > bal0.balance
+  const insufficient1 = need1 > bal1.balance
   const mustApprove0 = raw0 && allow0.needsApproval(raw0)
-  const mustApprove1 = need1.gt(0) && allow1.needsApproval(need1)
+  const mustApprove1 = need1 > 0n && allow1.needsApproval(need1)
 
   const add = () =>
     run({
       label: `Add liquidity to #${pos.id}`,
       successMessage: 'Liquidity added',
       send: () =>
-        pmIncreaseLiquidity(library.getSigner(), {
-          tokenId: pos.id,
+        pmIncreaseLiquidity(clients.wallet, {
+          tokenId: BigInt(pos.id),
           amount0Desired: raw0,
           amount1Desired: need1,
           amount0Min: minAfterSlippage(raw0, slippageBps),
           amount1Min: minAfterSlippage(need1, slippageBps),
-          deadline: deadlineFromNow(deadlineMin),
+          deadline: BigInt(deadlineFromNow(deadlineMin)),
         }),
       onSuccess: () => {
         setAddAmount0('')
@@ -173,7 +173,7 @@ function Detail({ tokenId }) {
     })
 
   const burn = () =>
-    run({ label: `Close position #${pos.id}`, successMessage: 'Position closed', send: () => pmBurn(library.getSigner(), pos.id), onSuccess: () => router.push('/pool') })
+    run({ label: `Close position #${pos.id}`, successMessage: 'Position closed', send: () => pmBurn(clients.wallet, pos.id), onSuccess: () => router.push('/pool') })
 
   if (error) {
     return <DataUnavailable title="Position not found" needs="a position you own on this network" />
@@ -196,7 +196,7 @@ function Detail({ tokenId }) {
   const lo = pos.tickLower <= min ? '0' : formatPrice(tickToPrice(pos.tickLower, t0.decimals, t1.decimals))
   const hi = pos.tickUpper >= max ? '∞' : formatPrice(tickToPrice(pos.tickUpper, t0.decimals, t1.decimals))
   const cur = formatPrice(tickToPrice(pos.currentTick, t0.decimals, t1.decimals))
-  const closed = pos.liquidity.isZero()
+  const closed = pos.liquidity === 0n
   const owed0 = pos.tokensOwed0
   const owed1 = pos.tokensOwed1
 
@@ -222,8 +222,8 @@ function Detail({ tokenId }) {
         <Row k="Current price" v={cur} />
         {worth && !closed && (
           <>
-            <Row k={`Pooled ${t0.symbol}`} v={formatAmount(BigNumber.from(toIntegerString(worth.amount0)), t0.decimals, 6)} />
-            <Row k={`Pooled ${t1.symbol}`} v={formatAmount(BigNumber.from(toIntegerString(worth.amount1)), t1.decimals, 6)} />
+            <Row k={`Pooled ${t0.symbol}`} v={formatAmount(BigInt(toIntegerString(worth.amount0)), t0.decimals, 6)} />
+            <Row k={`Pooled ${t1.symbol}`} v={formatAmount(BigInt(toIntegerString(worth.amount1)), t1.decimals, 6)} />
           </>
         )}
         <Row k={`Fees credited ${t0.symbol}`} v={formatAmount(owed0, t0.decimals, 6) || '0'} />
@@ -309,8 +309,8 @@ function Detail({ tokenId }) {
               <input type="range" min="1" max="100" value={percent} onChange={(e) => setPercent(Number(e.target.value))} className="w-full" aria-label="Percent of liquidity to remove" />
               {removeEst && (
                 <div className="text-xs text-[var(--text-tertiary)] font-mono space-y-1">
-                  <div>You receive about {formatAmount(BigNumber.from(toIntegerString(removeEst.amount0)), t0.decimals, 6)} {t0.symbol}</div>
-                  <div>and about {formatAmount(BigNumber.from(toIntegerString(removeEst.amount1)), t1.decimals, 6)} {t1.symbol}, plus fees</div>
+                  <div>You receive about {formatAmount(BigInt(toIntegerString(removeEst.amount0)), t0.decimals, 6)} {t0.symbol}</div>
+                  <div>and about {formatAmount(BigInt(toIntegerString(removeEst.amount1)), t1.decimals, 6)} {t1.symbol}, plus fees</div>
                 </div>
               )}
               {hasWeth && (
@@ -325,7 +325,7 @@ function Detail({ tokenId }) {
             </div>
           )}
 
-          {closed && owed0.isZero() && owed1.isZero() && (
+          {closed && owed0 === 0n && owed1 === 0n && (
             <button disabled={pending} onClick={burn} className="w-full py-3 rounded-xl text-sm font-semibold border border-[var(--border)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]">
               Close position (burn NFT)
             </button>

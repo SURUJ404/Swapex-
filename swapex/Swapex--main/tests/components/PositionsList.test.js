@@ -43,7 +43,7 @@ const position = (id, { inRange = true, empty = false } = {}) => ({
   token1: { symbol: 'tUSDC', decimals: 6, logo: 'data:image/svg+xml;utf8,u' },
   fee: 3000,
   inRange,
-  liquidity: { isZero: () => empty },
+  liquidity: empty ? 0n : 100n,
   tickLower: -60,
   tickUpper: 60,
 })

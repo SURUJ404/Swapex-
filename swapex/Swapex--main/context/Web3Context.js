@@ -1,139 +1,141 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { Web3ReactProvider, useWeb3React, createWeb3ReactRoot } from '@web3-react/core'
-import { InjectedConnector } from '@web3-react/injected-connector'
-import { WalletLinkConnector } from '@web3-react/walletlink-connector'
-import { ethers } from 'ethers'
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react'
+import { WagmiProvider } from 'wagmi'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useAccount, useConnect, useDisconnect, useSwitchChain, usePublicClient, useWalletClient } from 'wagmi'
+import { formatEther } from 'viem'
+import { wagmiConfig } from '../lib/wagmi'
 import { REQUIRED_CHAIN_ID, CHAINS } from '../lib/config'
 
-const injected = new InjectedConnector({
-  supportedChainIds: Object.keys(CHAINS).map(Number),
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
 })
-
-const walletlink = new WalletLinkConnector({
-  url: CHAINS[REQUIRED_CHAIN_ID]?.rpc || CHAINS[11155111].rpc,
-  appName: 'SWAPEX',
-})
-
-const NetworkContextName = 'NETWORK'
-// createWeb3ReactRoot throws if the key already exists. Turbopack re-evaluates
-// this module after an edit (and each page entry gets its own copy), which used
-// to crash every page with "A root already exists for provided key NETWORK".
-// Stashing the first root on globalThis makes re-evaluation reuse it instead.
-const NETWORK_ROOT = '__swapexWeb3NetworkRoot'
-const Web3ProviderNetwork =
-  globalThis[NETWORK_ROOT] || (globalThis[NETWORK_ROOT] = createWeb3ReactRoot(NetworkContextName))
-
-function getLibrary(provider) {
-  const library = new ethers.providers.Web3Provider(provider)
-  library.pollingInterval = 12000
-  return library
-}
 
 const Web3Context = createContext()
 
 function Web3Manager({ children }) {
-  const { active, error, account, library, chainId, activate, deactivate } = useWeb3React()
+  const { address, isConnected, chainId } = useAccount()
+  const { connectors, connect, error: connectError } = useConnect()
+  const { disconnect } = useDisconnect()
+  const { switchChain } = useSwitchChain()
+  const publicClient = usePublicClient()
+  const { data: walletClient } = useWalletClient()
+
   const [balance, setBalance] = useState('0')
   const [ensName, setEnsName] = useState('')
   const [walletModalOpen, setWalletModalOpen] = useState(false)
+
+  const active = Boolean(isConnected && address)
   const wrongNetwork = Boolean(active && chainId && chainId !== REQUIRED_CHAIN_ID)
 
-  const connectWallet = useCallback(async (connector) => {
-    try {
-      await activate(connector)
-    } catch (e) {
-      console.error('connectWallet error:', e)
-    }
-  }, [activate])
+  /** Connect by wallet id from WALLETS (the connect modal's list). */
+  const connectWallet = useCallback(
+    async (walletId) => {
+      const connector = connectors.find((c) => c.id === walletId)
+      if (!connector) return
+      try {
+        connect({ connector })
+      } catch (e) {
+        console.error('connectWallet error:', e)
+      }
+    },
+    [connectors, connect]
+  )
 
-  /** Switch the wallet to any chain in CHAINS; adds the chain when the wallet does not know it. */
+  /** Switch the wallet to any chain in CHAINS; wagmi adds chains the wallet does not know. */
   const switchTo = useCallback(
     async (targetId) => {
-      const target = CHAINS[targetId]
-      const provider = library?.provider
-      if (!provider?.request || !target) return false
+      if (!CHAINS[targetId]) return false
       try {
-        await provider.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: target.hexId }],
-        })
+        await switchChain({ chainId: targetId })
         return true
       } catch (e) {
-        // 4902: chain not added to the wallet yet
-        if (e?.code === 4902 || e?.data?.originalError?.code === 4902) {
-          try {
-            await provider.request({
-              method: 'wallet_addEthereumChain',
-              params: [
-                {
-                  chainId: target.hexId,
-                  chainName: target.name,
-                  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-                  rpcUrls: target.rpc ? [target.rpc] : [],
-                  blockExplorerUrls: target.explorer ? [target.explorer] : [],
-                },
-              ],
-            })
-            return true
-          } catch (addErr) {
-            console.error('switchTo add error:', addErr)
-            return false
-          }
-        }
         console.error('switchTo error:', e)
         return false
       }
     },
-    [library]
+    [switchChain]
   )
 
   const switchNetwork = useCallback(() => switchTo(REQUIRED_CHAIN_ID), [switchTo])
 
   const disconnectWallet = useCallback(() => {
     try {
-      deactivate()
+      disconnect()
     } catch (e) {
       console.error('disconnectWallet error:', e)
     }
-  }, [deactivate])
+  }, [disconnect])
 
   useEffect(() => {
-    if (account && library) {
+    if (address && publicClient && !wrongNetwork) {
       let stale = false
       const fetchBalance = async () => {
         try {
-          const bal = await library.getBalance(account)
-          if (!stale) setBalance(ethers.utils.formatEther(bal))
+          const bal = await publicClient.getBalance({ address })
+          if (!stale) setBalance(formatEther(bal))
         } catch (e) {
           console.error(e)
         }
       }
       fetchBalance()
-      library.on('block', fetchBalance)
+      const unwatch = publicClient.watchBlockNumber({ onBlockNumber: fetchBalance })
       return () => {
         stale = true
-        library.removeListener('block', fetchBalance)
+        unwatch()
       }
     }
-  }, [account, library])
+    let staleReset = false
+    Promise.resolve()
+      .then(() => {
+        if (!staleReset) setBalance('0')
+      })
+      .catch(() => {})
+    return () => {
+      staleReset = true
+    }
+  }, [address, publicClient, wrongNetwork])
 
   useEffect(() => {
-    if (account && library) {
+    if (address && publicClient) {
       let stale = false
-      library.lookupAddress(account).then((name) => {
-        if (!stale) setEnsName(name || '')
-      }).catch(() => {})
-      return () => { stale = true }
+      publicClient
+        .getEnsName({ address })
+        .then((name) => {
+          if (!stale) setEnsName(name || '')
+        })
+        .catch(() => {})
+      return () => {
+        stale = true
+      }
     }
-  }, [account, library])
+    let staleReset = false
+    Promise.resolve()
+      .then(() => {
+        if (!staleReset) setEnsName('')
+      })
+      .catch(() => {})
+    return () => {
+      staleReset = true
+    }
+  }, [address, publicClient])
+
+  // `clients` replaces ethers' `library`: a viem public client for reads and the
+  // wallet client for writes. Both are null until the user connects.
+  const clients = useMemo(
+    () => ({
+      public: isConnected ? publicClient : null,
+      wallet: isConnected ? walletClient : null,
+      account: address || null,
+    }),
+    [isConnected, publicClient, walletClient, address]
+  )
 
   return (
     <Web3Context.Provider
       value={{
         active,
-        error,
-        account,
-        library,
+        error: connectError || null,
+        account: address || null,
         chainId,
         balance,
         ensName,
@@ -144,6 +146,7 @@ function Web3Manager({ children }) {
         walletModalOpen,
         setWalletModalOpen,
         disconnectWallet,
+        clients,
       }}
     >
       {children}
@@ -153,11 +156,11 @@ function Web3Manager({ children }) {
 
 function Provider({ children }) {
   return (
-    <Web3ReactProvider getLibrary={getLibrary}>
-      <Web3ProviderNetwork getLibrary={getLibrary}>
+    <WagmiProvider config={wagmiConfig}>
+      <QueryClientProvider client={queryClient}>
         <Web3Manager>{children}</Web3Manager>
-      </Web3ProviderNetwork>
-    </Web3ReactProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
   )
 }
 
@@ -169,4 +172,4 @@ function useWeb3() {
   return context
 }
 
-export { Provider, useWeb3, injected, walletlink, getLibrary }
+export { Provider, useWeb3 }

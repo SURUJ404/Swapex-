@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react'
-import { ethers } from 'ethers'
+import { formatUnits } from 'viem'
 import { useWeb3 } from '../context/Web3Context'
 import { balanceOf, decimals } from '../lib/contracts/erc20'
 import { TOKENS as TOKEN_LIST } from '../lib/tokens'
 import Skeleton from './Skeleton'
 
 export default function WalletOverview() {
-  const { account, library, balance } = useWeb3()
+  const { account, clients, balance } = useWeb3()
+  const publicClient = clients.public
   const [tokenBalances, setTokenBalances] = useState({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!account || !library) {
+    if (!account || !publicClient) {
       Promise.resolve()
         .then(() => {
           setTokenBalances({})
@@ -31,9 +32,9 @@ export default function WalletOverview() {
       const nonNative = TOKEN_LIST.filter((t) => t.address !== 'NATIVE')
       for (const token of nonNative) {
         try {
-          const bal = await balanceOf(library, token.address, account)
-          const dec = await decimals(library, token.address)
-          results[token.symbol] = ethers.utils.formatUnits(bal, dec)
+          const bal = await balanceOf(publicClient, token.address, account)
+          const dec = await decimals(publicClient, token.address)
+          results[token.symbol] = formatUnits(bal, Number(dec))
         } catch {
           results[token.symbol] = '0'
         }
@@ -45,7 +46,7 @@ export default function WalletOverview() {
     }
     fetchAll()
     return () => { stale = true }
-  }, [account, library])
+  }, [account, publicClient])
 
   if (!account) return null
 

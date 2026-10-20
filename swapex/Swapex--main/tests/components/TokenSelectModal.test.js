@@ -10,10 +10,10 @@ const UNKNOWN = '0x1111111111111111111111111111111111111111'
 const IMPORTED = '0x2222222222222222222222222222222222222222'
 const STORAGE_KEY = 'swapex:imported-tokens:11155111' // default chain when NEXT_PUBLIC_CHAIN_ID is unset
 
-const state = { library: null }
+const state = { clients: { public: null, wallet: null, account: null } }
 
 vi.mock('../../context/Web3Context', () => ({
-  useWeb3: () => ({ library: state.library }),
+  useWeb3: () => ({ clients: state.clients }),
 }))
 
 vi.mock('../../lib/tokenMeta', () => ({
@@ -22,7 +22,7 @@ vi.mock('../../lib/tokenMeta', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
-  state.library = null
+  state.clients = { public: null, wallet: null, account: null }
   window.localStorage.clear()
 })
 
@@ -47,14 +47,14 @@ describe('TokenSelectModal', () => {
     const user = userEvent.setup()
     const onSelect = vi.fn()
     const onClose = vi.fn()
-    state.library = { _provider: 'fake' }
+    state.clients = { public: { _client: 'fake' }, wallet: null, account: '0x1' }
     getTokenMeta.mockResolvedValueOnce({ address: UNKNOWN, symbol: 'MOCK', name: 'Mock Token', decimals: 18 })
 
     render(<TokenSelectModal open onClose={onClose} onSelect={onSelect} />)
     await user.type(screen.getByPlaceholderText(/Search by name/), UNKNOWN)
     await user.click(screen.getByRole('button', { name: 'Import' }))
 
-    expect(getTokenMeta).toHaveBeenCalledWith(state.library, UNKNOWN)
+    expect(getTokenMeta).toHaveBeenCalledWith(state.clients.public, UNKNOWN)
     expect(onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ address: UNKNOWN, symbol: 'MOCK', name: 'Mock Token', decimals: 18 })
     )
@@ -65,7 +65,7 @@ describe('TokenSelectModal', () => {
   it('shows an honest error when the on-chain read fails', async () => {
     const user = userEvent.setup()
     const onSelect = vi.fn()
-    state.library = { _provider: 'fake' }
+    state.clients = { public: { _client: 'fake' }, wallet: null, account: '0x1' }
     getTokenMeta.mockRejectedValueOnce(new Error('not a token'))
 
     render(<TokenSelectModal open onClose={vi.fn()} onSelect={onSelect} />)

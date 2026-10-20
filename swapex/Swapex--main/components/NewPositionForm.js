@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/router'
-import { BigNumber } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
 import Skeleton from './Skeleton'
 import { getPool, slot0 } from '../lib/contracts/factory'
@@ -39,7 +38,8 @@ function numberOrNull(s) {
 }
 
 function Form() {
-  const { library } = useWeb3()
+  const { account, clients } = useWeb3()
+  const publicClient = clients.public
   const router = useRouter()
   const { run, pending } = useTransact()
   const { approve, approving } = useApprove()
@@ -74,7 +74,7 @@ function Form() {
 
   // ---- does the pool exist, and where is its price?
   useEffect(() => {
-    if (!library || sameToken) return
+    if (!publicClient || sameToken) return
     let cancelled = false
     Promise.resolve()
       .then(() => {
@@ -83,9 +83,9 @@ function Form() {
       .catch(() => {})
     ;(async () => {
       try {
-        const address = await getPool(library, addrA, addrB, fee)
+        const address = await getPool(publicClient, addrA, addrB, fee)
         if (address === ZERO) return !cancelled && setPool({ loading: false, address: null, sqrtPriceX96: null })
-        const s0 = await slot0(library, address)
+        const s0 = await slot0(publicClient, address)
         if (!cancelled) setPool({ loading: false, address, sqrtPriceX96: s0.sqrtPriceX96.toString() })
       } catch {
         if (!cancelled) setPool({ loading: false, address: null, sqrtPriceX96: null })
@@ -94,7 +94,7 @@ function Form() {
     return () => {
       cancelled = true
     }
-  }, [library, addrA, addrB, fee, sameToken])
+  }, [publicClient, addrA, addrB, fee, sameToken])
 
   // prices are shown as "B per A": flip into the pool's token1-per-token0 orientation when A is token1
   const toPoolPrice = (priceBperA) => (aIsToken0 ? priceBperA : 1 / priceBperA)
@@ -154,7 +154,7 @@ function Form() {
         })
         if (!r) return set('')
         const otherRaw = typedIsToken0 ? r.amount1 : r.amount0
-        set(otherRaw > 0 ? formatAmount(BigNumber.from(toIntegerString(otherRaw)), other.decimals, other.decimals) : '')
+        set(otherRaw > 0 ? formatAmount(BigInt(toIntegerString(otherRaw)), other.decimals, other.decimals) : '')
       })
       .catch(() => {})
   }, [lastEdited, amountA, amountB, rangeReady, startSqrtX96, tickLower, tickUpper, aIsToken0, tokenA, tokenB])
@@ -163,20 +163,18 @@ function Form() {
   const rawB = parseAmount(amountB, tokenB.decimals)
   const needA = needsA && rawA
   const needB = needsB && rawB
-  const insufficientA = needA && rawA.gt(balA.balance)
-  const insufficientB = needB && rawB.gt(balB.balance)
+  const insufficientA = needA && rawA > balA.balance
+  const insufficientB = needB && rawB > balB.balance
   const mustApproveA = needA && allowA.needsApproval(rawA)
   const mustApproveB = needB && allowB.needsApproval(rawB)
 
   const submit = async () => {
-    const signer = library.getSigner()
-    const account = await signer.getAddress()
-    const [d0, d1] = aIsToken0 ? [rawA || BigNumber.from(0), rawB || BigNumber.from(0)] : [rawB || BigNumber.from(0), rawA || BigNumber.from(0)]
+    const [d0, d1] = aIsToken0 ? [rawA || 0n, rawB || 0n] : [rawB || 0n, rawA || 0n]
     const t0 = toPathAddress(token0)
     const t1 = toPathAddress(token1)
     const calls = []
     if (!poolExists) {
-      calls.push(encodeCreateAndInitializePoolIfNecessary(t0, t1, fee, startSqrtX96))
+      calls.push(encodeCreateAndInitializePoolIfNecessary(t0, t1, fee, BigInt(startSqrtX96)))
     }
     calls.push(
       encodeMint({
@@ -190,7 +188,7 @@ function Form() {
         amount0Min: minAfterSlippage(d0, slippageBps),
         amount1Min: minAfterSlippage(d1, slippageBps),
         recipient: account,
-        deadline: deadlineFromNow(deadlineMin),
+        deadline: BigInt(deadlineFromNow(deadlineMin)),
       })
     )
     // native ETH is wrapped by the contract from msg.value; whatever it does not use comes back
@@ -200,7 +198,7 @@ function Form() {
     await run({
       label: `Add liquidity ${tokenA.symbol}/${tokenB.symbol}`,
       successMessage: 'Position created',
-      send: () => multicall(signer, calls, ethAmount ? { value: ethAmount } : {}),
+      send: () => multicall(clients.wallet, calls, ethAmount ? { value: ethAmount } : {}),
       onSuccess: () => router.push('/pool'),
     })
   }

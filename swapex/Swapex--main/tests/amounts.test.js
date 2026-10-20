@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { BigNumber } from 'ethers'
 import {
   parseAmount,
   minAfterSlippage,
@@ -30,14 +29,14 @@ describe('parseAmount', () => {
 
 describe('slippage', () => {
   it('uses integer basis-point math', () => {
-    expect(minAfterSlippage(BigNumber.from(10000), 50).toNumber()).toBe(9950)
-    expect(minAfterSlippage(BigNumber.from(10000), 10).toNumber()).toBe(9990) // 0.1% used to crash
-    expect(maxAfterSlippage(BigNumber.from(10000), 50).toNumber()).toBe(10050)
+    expect(minAfterSlippage(10000n, 50)).toBe(9950n)
+    expect(minAfterSlippage(10000n, 10)).toBe(9990n) // 0.1% used to crash
+    expect(maxAfterSlippage(10000n, 50)).toBe(10050n)
   })
   it('rejects invalid bps', () => {
-    expect(() => minAfterSlippage(BigNumber.from(1), 0.5)).toThrow()
-    expect(() => minAfterSlippage(BigNumber.from(1), -1)).toThrow()
-    expect(() => minAfterSlippage(BigNumber.from(1), 10001)).toThrow()
+    expect(() => minAfterSlippage(1n, 0.5)).toThrow()
+    expect(() => minAfterSlippage(1n, -1)).toThrow()
+    expect(() => minAfterSlippage(1n, 10001)).toThrow()
   })
   it('converts percent text to bps with a cap', () => {
     expect(percentToBps('0.5')).toBe(50)
@@ -51,9 +50,9 @@ describe('slippage', () => {
 
 describe('quote', () => {
   it('matches UniswapV2Library.quote', () => {
-    expect(quote(BigNumber.from(100), BigNumber.from(1000), BigNumber.from(2000)).toNumber()).toBe(200)
-    expect(quote(BigNumber.from(0), BigNumber.from(1000), BigNumber.from(2000))).toBeNull()
-    expect(quote(BigNumber.from(5), BigNumber.from(0), BigNumber.from(2000))).toBeNull()
+    expect(quote(100n, 1000n, 2000n)).toBe(200n)
+    expect(quote(0n, 1000n, 2000n)).toBeNull()
+    expect(quote(5n, 0n, 2000n)).toBeNull()
   })
 })
 
@@ -63,14 +62,14 @@ describe('misc', () => {
     expect(deadlineFromNow(NaN, 1_000_000_000_000)).toBe(1_000_000_000 + 1200)
   })
   it('formats base units', () => {
-    expect(formatAmount(BigNumber.from('1500000'), 6)).toBe('1.5')
-    expect(formatAmount(BigNumber.from('1000000'), 6)).toBe('1')
+    expect(formatAmount(1500000n, 6)).toBe('1.5')
+    expect(formatAmount(1000000n, 6)).toBe('1')
   })
   it('price impact excludes the 0.3% fee', () => {
     // 1 token in, pool 1:1 with huge reserves -> out ~ 0.997 -> impact ~ 0
-    const big = BigNumber.from('1000000000000000000000000')
-    const out = BigNumber.from('997000000000000000')
-    const impact = priceImpact(BigNumber.from('1000000000000000000'), out, [{ reserveIn: big, reserveOut: big }], 18, 18)
+    const big = 10n ** 24n
+    const out = 997000000000000000n
+    const impact = priceImpact(10n ** 18n, out, [{ reserveIn: big, reserveOut: big }], 18, 18)
     expect(impact).toBeLessThan(0.0001)
   })
 })

@@ -1,30 +1,31 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BigNumber, constants } from 'ethers'
 import { useWeb3 } from '../context/Web3Context'
 import { allowance as readAllowance } from '../lib/contracts/erc20'
 
+const MAX_UINT256 = (1n << 256n) - 1n
+
 /** ERC-20 allowance for `spender`. Native ETH never needs approval. */
 export default function useAllowance(token, spender) {
-  const { account, library, wrongNetwork } = useWeb3()
+  const { account, clients, wrongNetwork } = useWeb3()
   const [allowance, setAllowance] = useState(null) // null = unknown yet
   const address = token?.address
+  const publicClient = clients.public
 
   const refetch = useCallback(async () => {
     if (address === 'NATIVE') {
-      setAllowance(constants.MaxUint256)
+      setAllowance(MAX_UINT256)
       return
     }
-    if (!account || !library || !address || !spender || wrongNetwork) {
+    if (!account || !publicClient || !address || !spender || wrongNetwork) {
       setAllowance(null)
       return
     }
     try {
-      const a = await readAllowance(library, address, account, spender)
-      setAllowance(BigNumber.from(a))
+      setAllowance(await readAllowance(publicClient, address, account, spender))
     } catch {
       setAllowance(null)
     }
-  }, [account, library, address, spender, wrongNetwork])
+  }, [account, publicClient, address, spender, wrongNetwork])
 
   useEffect(() => {
     // deferred so the reset and the fetch state updates land in the async continuation
@@ -38,7 +39,7 @@ export default function useAllowance(token, spender) {
 
   /** True only when we know the allowance and it is below `amount`. */
   const needsApproval = useCallback(
-    (amount) => Boolean(amount) && address !== 'NATIVE' && allowance != null && allowance.lt(amount),
+    (amount) => Boolean(amount) && address !== 'NATIVE' && allowance != null && allowance < amount,
     [allowance, address]
   )
 

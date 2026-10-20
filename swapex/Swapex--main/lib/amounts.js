@@ -1,9 +1,9 @@
-import { BigNumber, utils } from 'ethers'
+import { parseUnits, formatUnits } from 'viem'
 
 const BPS = 10000
 
 /**
- * Parse a user-typed decimal string into a BigNumber of base units.
+ * Parse a user-typed decimal string into a bigint of base units.
  * Returns null for empty / invalid / non-positive input.
  * Extra fractional digits beyond `decimals` are truncated, never thrown on.
  */
@@ -15,8 +15,8 @@ export function parseAmount(value, decimals) {
   if (whole === '') whole = '0'
   frac = frac.slice(0, decimals)
   try {
-    const n = utils.parseUnits(frac ? `${whole}.${frac}` : whole, decimals)
-    return n.gt(0) ? n : null
+    const n = parseUnits(frac ? `${whole}.${frac}` : whole, decimals)
+    return n > 0n ? n : null
   } catch {
     return null
   }
@@ -25,13 +25,13 @@ export function parseAmount(value, decimals) {
 /** minimum received = amount * (10000 - bps) / 10000 (integer math only) */
 export function minAfterSlippage(amount, bps) {
   assertBps(bps)
-  return BigNumber.from(amount).mul(BPS - bps).div(BPS)
+  return (BigInt(amount) * BigInt(BPS - bps)) / BigInt(BPS)
 }
 
 /** maximum sent = amount * (10000 + bps) / 10000 */
 export function maxAfterSlippage(amount, bps) {
   assertBps(bps)
-  return BigNumber.from(amount).mul(BPS + bps).div(BPS)
+  return (BigInt(amount) * BigInt(BPS + bps)) / BigInt(BPS)
 }
 
 function assertBps(bps) {
@@ -56,11 +56,11 @@ export function bpsToPercent(bps) {
 
 /** quote(amountA, reserveA, reserveB), same as UniswapV2Library.quote */
 export function quote(amountA, reserveA, reserveB) {
-  const a = BigNumber.from(amountA)
-  const rA = BigNumber.from(reserveA)
-  const rB = BigNumber.from(reserveB)
-  if (a.lte(0) || rA.lte(0) || rB.lte(0)) return null
-  return a.mul(rB).div(rA)
+  const a = BigInt(amountA)
+  const rA = BigInt(reserveA)
+  const rB = BigInt(reserveB)
+  if (a <= 0n || rA <= 0n || rB <= 0n) return null
+  return (a * rB) / rA
 }
 
 /** Deadline as unix seconds, `minutes` from now. */
@@ -72,7 +72,7 @@ export function deadlineFromNow(minutes, nowMs = Date.now()) {
 /** Format base units to a short human string without float math on the raw value. */
 export function formatAmount(amount, decimals, maxFrac = 6) {
   if (amount == null) return ''
-  const s = utils.formatUnits(amount, decimals)
+  const s = formatUnits(BigInt(amount), decimals)
   const [w, f = ''] = s.split('.')
   const frac = f.slice(0, maxFrac).replace(/0+$/, '')
   return frac ? `${w}.${frac}` : w
@@ -80,13 +80,13 @@ export function formatAmount(amount, decimals, maxFrac = 6) {
 
 /**
  * Price impact of a route vs. spot price, excluding the 0.3% LP fee per hop.
- * hops: [{ reserveIn, reserveOut }] as BigNumbers; amountIn/amountOut as BigNumbers.
+ * hops: [{ reserveIn, reserveOut }] as bigints; amountIn/amountOut as bigints.
  * Returns a fraction (0.01 = 1%) or null if it cannot be computed.
  */
 export function priceImpact(amountIn, amountOut, hops, decimalsIn, decimalsOut) {
   try {
     if (!hops.length) return null
-    let spot = Number(utils.formatUnits(amountIn, decimalsIn))
+    let spot = Number(formatUnits(BigInt(amountIn), decimalsIn))
     for (const h of hops) {
       const rIn = Number(h.reserveIn)
       const rOut = Number(h.reserveOut)
@@ -95,7 +95,7 @@ export function priceImpact(amountIn, amountOut, hops, decimalsIn, decimalsOut) 
     }
     // the reserves are in raw units of each token, so rescale to token units
     spot = spot * Math.pow(10, decimalsIn) / Math.pow(10, decimalsOut)
-    const out = Number(utils.formatUnits(amountOut, decimalsOut))
+    const out = Number(formatUnits(BigInt(amountOut), decimalsOut))
     if (!(spot > 0)) return null
     return Math.max(0, 1 - out / spot)
   } catch {

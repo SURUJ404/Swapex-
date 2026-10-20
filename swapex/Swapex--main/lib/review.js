@@ -1,5 +1,5 @@
 // Pure summary math for the swap confirmation modal. No wallet or network access.
-import { BigNumber, utils } from 'ethers'
+import { parseUnits } from 'viem'
 import { formatAmount } from './amounts'
 import { HIGH_PRICE_IMPACT } from './config'
 
@@ -10,11 +10,11 @@ import { HIGH_PRICE_IMPACT } from './config'
 export function formatRate(amountIn, decimalsIn, amountOut, decimalsOut) {
   try {
     if (amountIn == null || amountOut == null) return null
-    const inBn = BigNumber.from(amountIn)
-    const outBn = BigNumber.from(amountOut)
-    if (inBn.lte(0) || outBn.lte(0)) return null
-    const one = utils.parseUnits('1', decimalsIn)
-    const perOne = outBn.mul(one).div(inBn)
+    const inB = BigInt(amountIn)
+    const outB = BigInt(amountOut)
+    if (inB <= 0n || outB <= 0n) return null
+    const one = parseUnits('1', decimalsIn)
+    const perOne = (outB * one) / inB
     return formatAmount(perOne, decimalsOut, 8)
   } catch {
     return null
@@ -36,7 +36,7 @@ export function needsExtraConfirm(impact) {
 export function feeEstimateWei(gasEstimate, gasPrice) {
   if (gasEstimate == null || gasPrice == null) return null
   try {
-    return BigNumber.from(gasEstimate).mul(gasPrice)
+    return BigInt(gasEstimate) * BigInt(gasPrice)
   } catch {
     return null
   }

@@ -9,7 +9,8 @@ import { getTokenMeta } from '../lib/tokenMeta'
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/
 
 export default function TokenSelectModal({ open, onClose, onSelect }) {
-  const { library } = useWeb3()
+  const { clients } = useWeb3()
+  const publicClient = clients?.public
   const [search, setSearch] = useState('')
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState(null)
@@ -21,11 +22,11 @@ export default function TokenSelectModal({ open, onClose, onSelect }) {
   const canImport = isAddress && !known
 
   const doImport = async () => {
-    if (!library || importing) return
+    if (!publicClient || importing) return
     setImporting(true)
     setImportError(null)
     try {
-      const meta = await getTokenMeta(library, query)
+      const meta = await getTokenMeta(publicClient, query)
       const entry = {
         address: meta.address,
         symbol: meta.symbol,
@@ -114,10 +115,10 @@ export default function TokenSelectModal({ open, onClose, onSelect }) {
               {importError && <div className="text-xs text-[var(--danger)] mb-2">{importError}</div>}
               <button
                 onClick={doImport}
-                disabled={!library || importing}
+                disabled={!publicClient || importing}
                 className="w-full py-2 rounded-lg text-xs font-semibold bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {!library ? 'Connect a wallet to import' : importing ? 'Reading on-chain…' : 'Import'}
+                {!publicClient ? 'Connect a wallet to import' : importing ? 'Reading on-chain…' : 'Import'}
               </button>
             </div>
           )}

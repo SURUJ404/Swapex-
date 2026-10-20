@@ -1,32 +1,29 @@
-// ERC-20 reads and writes. `library` is a provider for reads, `signer` for writes.
-import { contractAt, contractFor } from './client'
+// ERC-20 reads and writes. `client` is a viem public client for reads, a wallet client for writes.
+import { contractFor } from './client'
 
-export function balanceOf(library, token, owner) {
-  return contractFor('erc20', token, library).balanceOf(owner)
+const erc20At = (token) => contractFor('erc20', token)
+
+export function balanceOf(client, token, owner) {
+  return client.readContract({ ...erc20At(token), functionName: 'balanceOf', args: [owner] })
 }
 
-export function allowance(library, token, owner, spender) {
-  return contractFor('erc20', token, library).allowance(owner, spender)
+export function allowance(client, token, owner, spender) {
+  return client.readContract({ ...erc20At(token), functionName: 'allowance', args: [owner, spender] })
 }
 
-export function symbol(library, token) {
-  return contractFor('erc20', token, library).symbol()
+export function symbol(client, token) {
+  return client.readContract({ ...erc20At(token), functionName: 'symbol' })
 }
 
-export function decimals(library, token) {
-  return contractFor('erc20', token, library).decimals()
+export function decimals(client, token) {
+  return client.readContract({ ...erc20At(token), functionName: 'decimals' })
 }
 
-/** Exact-amount approve; returns the transaction (caller awaits / wraps in useTransact). */
-export function approve(signer, token, spender, amount) {
-  return contractFor('erc20', token, signer).approve(spender, amount)
+/** Exact-amount approve; returns the tx hash (caller awaits / wraps in useTransact). */
+export function approve(wallet, token, spender, amount) {
+  return wallet.writeContract({ ...erc20At(token), functionName: 'approve', args: [spender, amount] })
 }
 
-export function transfer(signer, token, to, amount) {
-  return contractFor('erc20', token, signer).transfer(to, amount)
-}
-
-/** Reads for the deployed test token (faucet) when present. */
-export function testToken(library, address) {
-  return contractFor('testToken', address, library)
+export function transfer(wallet, token, to, amount) {
+  return wallet.writeContract({ ...erc20At(token), functionName: 'transfer', args: [to, amount] })
 }

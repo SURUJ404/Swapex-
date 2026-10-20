@@ -395,3 +395,48 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
 - **Reversal:** drop the two routes, `eip712.ts`, `aggregate/orders.ts`, the orders table
   and its functions, the keeper script and the `limitOrders` known-address line; the
   `cacheTime: 0` fix should survive any reversal.
+
+
+## 2026-10-20 - viem + wagmi v2 migration finished: wallet-first transport, named multi-output reads (prompt section 5)
+
+- **Decision:** the web app now runs on wagmi v2 + viem; ethers v5 / web3-react are gone.
+  `Web3Context` wraps `WagmiProvider` + react-query and exposes `clients = { public, wallet,
+  account }` (the replacement for ethers' `library`), null until connected. All chain I/0
+  goes through `lib/contracts/*` adapters: viem `readContract` for reads, `writeContract`
+  for writes (tx hash back), non-view quoter functions through plain `eth_call` exactly like
+  the old `callStatic`. Chains/connectors come from `lib/config`; the required chain is
+  first so wagmi's default matches the app's target network.
+- **Decision:** transports are wallet-first: `custom(window.ethereum)` when an injected
+  provider exists, else `http(<chain rpc>)`. This restores the ethers-era semantics (every
+  read went through the wallet provider) and keeps the production CSP tight - `connect-src`
+  stays `'self' https: wss:` with no http RPC exception, because wallet-provided reads are
+  same-origin to the page. Direct `http://127.0.0.1:8545` reads from the bundle were blocked
+  by that CSP, which is why the browser e2e quote/reads were silent no-ops before this
+  change; the e2e shim's `/__e2e-rpc` proxy (same-origin) carries them instead.
+- **Fix:** viem's `decodeFunctionResult` returns a *plain array* for functions with more
+  than one output - the ABI's output names are dropped (ethers' `Result` kept them). After
+  the migration `r.amountOut` / `r.gasEstimate` (quoter, 4 outputs) and `s0.sqrtPriceX96`
+  (pool `slot0`, 4 outputs) were `undefined`: the confirm modal rendered empty amount rows
+  with `n/a` impact/fee, and confirming threw on `amountOutMinimum: null` before any RPC -
+  surfacing only as a `role="alert"` error toast, invisible to the spec's `role="status"`
+  assertion, so the test failed with no visible reason. `readNamed` in
+  `lib/contracts/client.js` re-attaches the ABI output names for multi-output reads (the
+  quoter's four functions + `slot0`); single-output reads and tuple results (viem already
+  decodes named tuples to objects, e.g. PM `positions`) pass through untouched. Three
+  regression tests in `tests/contracts.test.js` encode/decode through viem's real path, so
+  mocks can never mask this class of bug again.
+- **Decision:** local transports set `retryCount: 0`: a `PoolNotFound` revert for a fee
+  tier that does not exist is a valid answer, not a transient failure - the default 3
+  retries tripled every quote's RPC traffic (wagmi's own wallet transport disables retries
+  the same way). Unit-test fixtures caught up with viem (`parseGwei` instead of
+  `parseUnits(v,'gwei')`, bigint liquidity in the PositionsList fixture).
+- **Verified by running:** web - `npm run lint` (0 errors, 16 pre-existing warnings),
+  `npm test` 153/153 across 16 files (+3 `readNamed`), `npm run build` (13 pages),
+  `npm run e2e` 5/5 against the local stack (anvil + deploy/seed + export-abis + indexer +
+  web built with `NEXT_PUBLIC_CHAIN_ID=31337` / `NEXT_PUBLIC_INDEXER_URL=http://localhost:4000`);
+  indexer - `npm test` 63/63, `npm run typecheck`, `npm run test:integration` 9/9.
+- **Reversal:** drop `readNamed` at the adapter call sites and the multi-output reads break
+  silently again (undefined fields, no thrown error) - keep the three regression tests
+  either way; revert `lib/wagmi.js` transports to `http()`-only and browser reads of an
+  http RPC need a dev-only CSP exception once more (the e2e shim's wallet path keeps
+  working regardless).
