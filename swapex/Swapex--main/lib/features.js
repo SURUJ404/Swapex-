@@ -8,12 +8,17 @@ import { indexerConfigured } from './indexerApi'
 /**
  * - explore: needs a deployment (to know the chain) and an indexer URL.
  * - portfolio: works from chain events alone; enabled whenever deployed.
- * - limit: reserved, always false today (no order-type gating yet).
+ * - limit: the deployed SwapexLimitOrders contract plus an indexer (open orders
+ *   are listed and re-verified there; without it a signed order would be invisible).
  */
-export function getFeatures({ hasDeployment = Boolean(DEPLOYMENT), indexerAvailable = indexerConfigured() } = {}) {
+export function getFeatures({
+  hasDeployment = Boolean(DEPLOYMENT),
+  indexerAvailable = indexerConfigured(),
+  hasLimitOrders = Boolean(DEPLOYMENT && DEPLOYMENT.limitOrders),
+} = {}) {
   return {
     explore: Boolean(hasDeployment && indexerAvailable),
     portfolio: Boolean(hasDeployment),
-    limit: false,
+    limit: Boolean(hasDeployment && indexerAvailable && hasLimitOrders),
   }
 }

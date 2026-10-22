@@ -17,10 +17,23 @@ const CONTRACT_ERRORS = {
   InsufficientETH: 'Received less ETH than your minimum. Try raising slippage.',
   PermitFailed: 'The token permit signature was rejected.',
   NotAuthorized: 'You are not allowed to manage this position.',
+  // SwapexLimitOrders (cancel / keeper fills that surface through the UI)
+  NonceAlreadyCancelled: 'That nonce is already cancelled — every order signed with it is dead.',
+  OrderExpired: 'This order has expired and can no longer be filled.',
+  OrderAlreadyFilled: 'This order was already filled in full.',
+  InvalidSignature: 'The order signature does not match its maker.',
+  NothingToFill: 'Nothing is left to fill on this order.',
+  FillDeadlinePassed: 'The fill deadline passed. The keeper will retry.',
+  FeeOnTransferToken: 'The input token took a fee on transfer. Fee-on-transfer tokens cannot be used for limit orders.',
+  ProRataSlippage: 'The pool moved past the order’s promised output. Try again soon.',
+  ZeroMaker: 'The order is missing its maker.',
+  ZeroReceiver: 'The order is missing its receiver.',
+  SameToken: 'Input and output tokens must differ.',
+  ApproveFailed: 'The token approval failed. Check the token and try again.',
 }
 
 // ABIs come from the adapter layer (deduped, single source of truth).
-const ERROR_ABIS = ['router', 'positionManager', 'quoter'].map((name) => abiFor(name))
+const ERROR_ABIS = ['router', 'positionManager', 'quoter', 'limitOrders'].map((name) => abiFor(name))
 
 function revertData(e) {
   const candidates = [e?.data, e?.error?.data, e?.error?.error?.data, e?.data?.data, e?.error?.data?.data]

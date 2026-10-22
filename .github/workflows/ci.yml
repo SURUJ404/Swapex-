@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+# least privilege: every job only reads the repo (the gitleaks job widens
+# pull-requests:write locally so it can annotate PRs).
+permissions:
+  contents: read
+
+# a newer push to the same ref supersedes an in-flight run
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 # H (supply chain): every action below is pinned to a full commit SHA; the human-readable
 # tag follows in a comment. Moving tags (@v4, @v1) can be re-pointed by a compromised or
 # careless upstream — a SHA cannot. The SBOM is regenerated from the committed lockfile on
@@ -75,3 +85,114 @@ jobs:
       - run: forge test --match-contract 'AllowanceTransferTest|LimitOrdersTest|PositionFeesTest|SettleAccountingTest|FuzzTest' --fuzz-runs 5000
         env:
           FOUNDRY_PROFILE: ci
+
+  # The swapex/ tree is the active workspace (README "Layout"); the jobs above cover the
+  # legacy demo dirs that shipped before it. Same pinning rules apply to every action.
+  swapex-contracts:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: swapex/swapex-contracts
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+      # lib/ is gitignored, so every dependency is installed fresh; the OZ tag matches the
+      # pin in docs/CRYPTO_DECISIONS.md (local lib verified byte-identical to v5.2.0).
+      - run: forge install foundry-rs/forge-std --no-git
+      - run: forge install OpenZeppelin/openzeppelin-contracts@v5.2.0 --no-git
+      - run: forge build
+      # foundry.toml sets bytecode_hash = "none" + cbor_metadata = false precisely so the
+      # pool init-code hash and artifacts stay identical across machines — prove it here.
+      - run: find out -name '*.json' | sort | xargs sha256sum > /tmp/build1.sha256
+      - run: forge build --force
+      - run: find out -name '*.json' | sort | xargs sha256sum > /tmp/build2.sha256
+      - run: diff /tmp/build1.sha256 /tmp/build2.sha256 && echo "reproducible - artifacts identical across clean rebuilds"
+      # hard EIP-170 gate: every contract fits today (largest SwapexFactory 18,374 B of
+      # 24,576) — no relaxation like the legacy PoolManager needs.
+      - run: forge build --sizes
+      - run: forge test -vv
+      # the limit-order suite is where every exploitable off-by-one lives (signature
+      # verify, partial-fill rounding, nonce reuse, expiry) — double the fuzz runs for it.
+      - run: forge test --match-contract 'LimitOrdersTest' --fuzz-runs 5000
+      # the independent Python models must keep agreeing with the Solidity (verified
+      # locally: both scripts exit 0).
+      - run: python3 reference/check_refmath.py
+      - run: python3 reference/check_pool.py
+
+  swapex-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: swapex/Swapex--main
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # node 24 — the version this stack is verified on locally (24.12); the legacy
+          # jobs above stay on their own documented floor.
+          node-version: 24
+          cache: npm
+          cache-dependency-path: swapex/Swapex--main/package-lock.json
+      - run: npm ci
+      # H: SBOM from the committed lockfile via npm's built-in generator (no extra package
+      # to trust); uploaded as a run artifact — this app has no committed baseline file.
+      - run: npm sbom --sbom-format cyclonedx --sbom-type application > sbom.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: swapex-web-sbom
+          path: swapex/Swapex--main/sbom.cdx.json
+      - run: npm run lint
+      - run: npm test
+      # static export builds without NEXT_PUBLIC_* — feature gates resolve to their honest
+      # "not connected" states, which is exactly what the build must render.
+      - run: npm run build
+      # fails on known high/critical advisories in production dependencies (verified
+      # locally: exit 0)
+      - run: npm audit --omit=dev --audit-level=high
+
+  swapex-indexer:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: swapex/swapex-indexer
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24 # the stack's verified version locally; floor stays 20 (docs)
+          cache: npm
+          cache-dependency-path: swapex/swapex-indexer/package-lock.json
+      # the integration suite spawns a fresh anvil and drives
+      # swapex-contracts/scripts/e2e-local.sh end to end — foundry and the contracts'
+      # libs must be in place before it runs.
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
+      - run: forge install foundry-rs/forge-std --no-git
+        working-directory: swapex/swapex-contracts
+      - run: forge install OpenZeppelin/openzeppelin-contracts@v5.2.0 --no-git
+        working-directory: swapex/swapex-contracts
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run test:integration
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    # widen the workflow-wide contents:read so the action can annotate PRs
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # full history — gitleaks scans every commit, not just the tip.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      # .gitleaks.toml at the repo root is picked up automatically: default rules plus a
+      # narrow allowlist for the two public Anvil test keys (AGENTS.md rule 1) and four
+      # public token addresses the entropy rule misreads. Verified locally: 103 commits
+      # scanned, 0 leaks with --exit-code=1.
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # personal account: no GITLEAKS_LICENSE needed; point the action at our config
+          # explicitly (CLI auto-detect covers the dot-prefixed name either way).
+          GITLEAKS_CONFIG: .gitleaks.toml

@@ -70,21 +70,24 @@ Swapex stays Next.js. We copy the *experience*, not the code.
   through the wallet modal via the injected provider, swap through the confirm modal, add a
   full-range position, remove an owned position, explore with indexer data (token cells, pool
   cells, pool search narrowing).
-- Next: limit orders and the viem + wagmi migration (W8).
+- Done (2026-10-22): `/limit` limit orders - ERC-20 pair, limit price, approve-then-place,
+  EIP-712 signing, my/open orders with live status, cancel by nonce - and (2026-10-20) the
+  viem + wagmi migration (W8).
 - Removed: the old V2 add/remove/create/pool forms. /remove and /create redirect to /pool and /add.
 
 ## Honest status
-- Contracts: compiled and tested here with Foundry (80+ tests pass) and exercised end to end on a local anvil node.
-- Web app: `npm ci`, `npm test` (150 pass: 129 logic + 21 jsdom component tests covering ConfirmSwapModal,
-  TokenSelectModal, NetworkGuard, PositionsList), `npm run lint` (0 errors, pre-existing `<img>` warnings only) and
-  `npm run build` all pass on Node 24. Swap, positions, and now Explore (tokens + pools tables + detail
-  pages with charts) are verified against a live local stack: anvil + indexer + `next start`, including
+- Contracts: compiled and tested here with Foundry (104 tests pass) and exercised end to end on a local anvil node.
+- Web app: `npm ci`, `npm test` (190 pass across 19 files: logic + jsdom component tests covering ConfirmSwapModal,
+  TokenSelectModal, NetworkGuard, PositionsList, LimitOrderForm, LimitOrdersTable), `npm run lint` (0 errors, pre-existing `<img>` warnings only) and
+  `npm run build` all pass on Node 24. Swap, positions, Explore (tokens + pools tables + detail
+  pages with charts), and limit orders are verified against a live local stack: anvil + indexer + `next start`, including
   the top-nav search routes (symbol/pair/address, ambiguous and no-match fallbacks, indexer-down banner)
   and position ids from the indexer cross-checked against on-chain `ownerOf`. Browser e2e
-  (`npm run e2e`: 5 Playwright specs) runs the wallet path headless against that stack -
-  injected-provider connect plus swap/add/remove transactions on an anvil with unlocked dev
-  accounts. A real MetaMask extension (lock state, signing prompts, network-switch UX) is still
+  (`npm run e2e`: 6 Playwright specs) runs the wallet path headless against that stack -
+  injected-provider connect plus swap/add/remove transactions and limit-order place+cancel on an
+  anvil with unlocked dev accounts. A real MetaMask extension (lock state, signing prompts, network-switch UX) is still
   a manual check against the local anvil stack (`dev.sh`).
-- Indexer: `npm test` (40 pass) and `npm run typecheck` clean on Node 24. Verified live against anvil with
+- Indexer: `npm test` (63 pass), `npm run typecheck`, and the anvil-backed integration suite (9 pass)
+  clean on Node 24. Verified live against anvil with
   real Swap events (timestamps spread across an hour to produce multi-point candles).
 - Screens whose contracts or indexer do not exist yet ship disabled with a clear message.

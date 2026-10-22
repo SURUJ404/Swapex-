@@ -2,40 +2,27 @@
 
 What the Swapex contracts do not provide today, how that limits the front end, and the
 exact interface the front end would consume if the owner ever approves adding the missing
-contracts. Derived from `ARCHITECTURE_AUDIT.md` §6; contracts remain read-only until the
-owner asks for changes. All snippets are original sketches (no external code).
+contracts. Derived from `ARCHITECTURE_AUDIT.md` §6; contracts were read-only until the
+owner approved the limit-order work (section 1 below is now closed). All snippets are
+original sketches (no external code).
 
-## 1. No limit-order contract
+## 1. Limit-order contract (closed - shipped)
 
-`/limit` ships as an honest disabled screen. Filling a limit order needs an escrow or
-signature-based order book contract plus an indexer of open orders.
+The gap this section described is closed: `SwapexLimitOrders` ships in
+`swapex-contracts/src/periphery/` (EIP-712 orders verified with OpenZeppelin
+`SignatureChecker`, cancel by nonce, remaining amounts tracked in contract state, full
+reverts instead of partial fills) plus a keeper script to fill settled orders. The front
+end has its real screen: the indexer accepts signed orders (`POST /orders`) and derives
+`open|filled|cancelled|expired` from events; `/limit` signs, places, lists and cancels
+against it. The original interface sketch this section used to carry (on-chain
+`postOrder`, `bytes32 orderId`) is in git history - the shipped design signs off-chain
+and cancels on-chain instead.
 
-Front end would need:
-
-```solidity
-interface ISwapexLimitOrders {
-    enum OrderStatus { Open, Filled, Cancelled, Expired }
-
-    struct Order {
-        address maker;
-        address tokenIn;
-        address tokenOut;
-        uint24  fee;
-        uint256 amountIn;      // remaining
-        uint256 minAmountOut;  // limit price, slippage-adjusted at fill time
-        uint64  expiry;
-        bytes32 salt;
-    }
-
-    function postOrder(Order calldata order, bytes calldata signature) external;
-    function cancelOrder(bytes32 orderId) external;
-    function fillOrder(bytes32 orderId, uint256 amountInMax) external returns (uint256 amountOut);
-    function getOrder(bytes32 orderId) external view returns (Order memory, OrderStatus);
-}
-```
-
-Adapter note: fills must revert (not partial-fill) like the router, and the order id should
-be `keccak(abi.encode(order))` so the UI can derive it without an indexer round-trip.
+Remaining constraint: no real testnet deployment exists yet — the web ships
+`Swapex--main/lib/deployments/11155111.json` (and 84532 / 421614) as honest
+not-deployed placeholders with empty addresses, so `getDeployment()` gates the whole app
+off those chains. A deploy + `scripts/export-abis.sh` run there (which must include the
+`limitOrders` address) is what turns `/limit` on for them.
 
 ## 2. No Permit2
 
@@ -127,7 +114,7 @@ should switch to reading `factory.FEE_TIER_AMOUNTS` at runtime instead of the co
 
 | Gap | Blocks | Status |
 |---|---|---|
-| Limit orders | `/limit` real mode | disabled screen, by design |
+| Limit orders | `/limit` real mode | closed: `SwapexLimitOrders` + `/limit` UI on 31337; gated off where the manifest lacks the address |
 | Permit2 | 1-tx approve+swap | two-tx approvals, fine for testnet |
 | Quoter non-view | nothing (handled) | `callStatic` in adapter |
 | Swap event shape | indexer design | take pool from `log.address` |

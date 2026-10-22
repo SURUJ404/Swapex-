@@ -8,6 +8,8 @@ import {
   getPoolCandles,
   getPoolSwaps,
   getPositions,
+  getOrders,
+  postOrder,
   indexerConfigured,
   IndexError,
   fetchWithTimeout,
@@ -183,23 +185,128 @@ describe('getPositions', () => {
   })
 })
 
+describe('getOrders', () => {
+  const order = {
+    orderHash: '0x' + 'ab'.repeat(32),
+    maker: ADDR,
+    tokenIn: ADDR2,
+    tokenOut: ADDR,
+    amountIn: '1000000000000000000',
+    minAmountOut: '2000000000',
+    expiry: 1800000000,
+    nonce: '5',
+    receiver: ADDR,
+    fee: 3000,
+    signature: '0x' + 'cd'.repeat(65),
+    verifyingContract: ADDR,
+    chainId: 31337,
+    submittedAt: 1700000000,
+    filled: '0',
+    amountOutReceived: '0',
+    remaining: '1000000000000000000',
+    cancelled: false,
+    status: 'open',
+    fillable: true,
+  }
+
+  it('returns null when no base URL is configured', async () => {
+    await expect(getOrders({ baseUrl: null })).resolves.toBeNull()
+  })
+
+  it('builds maker/status/limit query params and parses the payload', async () => {
+    const payload = { orders: [order], total: 1, limitOrders: ADDR, limit: 50, offset: 0 }
+    const path = `/orders?maker=${ADDR}&status=open&limit=50`
+    const fetchImpl = fetchStub({ [path]: payload })
+    await expect(getOrders({ maker: ADDR, status: 'open', limit: 50, baseUrl: BASE, fetchImpl })).resolves.toEqual(payload)
+    expect(fetchImpl).toHaveBeenCalledWith(`${BASE}${path}`, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+  })
+
+  it('rejects a payload whose status is not a known order status (bad index data)', async () => {
+    const fetchImpl = fetchStub({ '/orders': { orders: [{ ...order, status: 'weird' }], total: 1, limitOrders: ADDR, limit: 25, offset: 0 } })
+    await expect(getOrders({ baseUrl: BASE, fetchImpl })).rejects.toBeInstanceOf(IndexError)
+  })
+})
+
+describe('postOrder', () => {
+  const payload = {
+    order: {
+      maker: ADDR,
+      tokenIn: ADDR2,
+      tokenOut: ADDR,
+      amountIn: '1000000000000000000',
+      minAmountOut: '2000000000',
+      expiry: '1800000000',
+      nonce: '5',
+      receiver: ADDR,
+    },
+    signature: '0x' + 'cd'.repeat(65),
+    fee: 3000,
+  }
+
+  it('returns null when no base URL is configured', async () => {
+    await expect(postOrder(payload, { baseUrl: null })).resolves.toBeNull()
+  })
+
+  it('POSTs JSON and parses the accepted response', async () => {
+    const fetchImpl = vi.fn(async (url, init) => {
+      expect(url).toBe(`${BASE}/orders`)
+      expect(init.method).toBe('POST')
+      expect(init.headers['content-type']).toBe('application/json')
+      expect(JSON.parse(init.body)).toEqual(payload)
+      return jsonResponse({ orderHash: '0x' + 'ab'.repeat(32), status: 'accepted', checked: 'eoa' })
+    })
+    await expect(postOrder(payload, { baseUrl: BASE, fetchImpl })).resolves.toEqual({
+      orderHash: '0x' + 'ab'.repeat(32),
+      status: 'accepted',
+      checked: 'eoa',
+    })
+  })
+
+  it('surfaces the server rejection reason in the error message', async () => {
+    const fetchImpl = async () => jsonResponse({ error: 'invalid signature' }, { status: 400 })
+    await expect(postOrder(payload, { baseUrl: BASE, fetchImpl })).rejects.toMatchObject({
+      name: 'IndexerError',
+      status: 400,
+      message: 'invalid signature',
+    })
+  })
+
+  it('rejects a response missing required fields', async () => {
+    const fetchImpl = async () => jsonResponse({ orderHash: '0x1' })
+    await expect(postOrder(payload, { baseUrl: BASE, fetchImpl })).rejects.toBeInstanceOf(IndexError)
+  })
+
+  it('wraps transport failures as IndexError', async () => {
+    const fetchImpl = async () => {
+      throw new TypeError('fetch failed')
+    }
+    await expect(postOrder(payload, { baseUrl: BASE, fetchImpl })).rejects.toBeInstanceOf(IndexError)
+  })
+})
+
 describe('getFeatures', () => {
   it('explore needs deployment + indexer, portfolio needs deployment', () => {
-    expect(getFeatures({ hasDeployment: true, indexerAvailable: true })).toEqual({
+    expect(getFeatures({ hasDeployment: true, indexerAvailable: true, hasLimitOrders: true })).toEqual({
       explore: true,
       portfolio: true,
-      limit: false,
+      limit: true,
     })
-    expect(getFeatures({ hasDeployment: true, indexerAvailable: false })).toEqual({
+    expect(getFeatures({ hasDeployment: true, indexerAvailable: false, hasLimitOrders: true })).toEqual({
       explore: false,
       portfolio: true,
       limit: false,
     })
-    expect(getFeatures({ hasDeployment: false, indexerAvailable: true })).toEqual({
+    expect(getFeatures({ hasDeployment: false, indexerAvailable: true, hasLimitOrders: false })).toEqual({
       explore: false,
       portfolio: false,
       limit: false,
     })
+  })
+
+  it('limit additionally needs the deployed limit contract and an indexer', () => {
+    expect(getFeatures({ hasDeployment: true, indexerAvailable: true, hasLimitOrders: false }).limit).toBe(false)
+    expect(getFeatures({ hasDeployment: true, indexerAvailable: false, hasLimitOrders: true }).limit).toBe(false)
+    expect(getFeatures({ hasDeployment: true, indexerAvailable: true, hasLimitOrders: true }).limit).toBe(true)
   })
 })
 

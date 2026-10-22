@@ -440,3 +440,64 @@ per AGENTS.md rule 7. Each entry: date, decision, rationale, reversal path.
   either way; revert `lib/wagmi.js` transports to `http()`-only and browser reads of an
   http RPC need a dev-only CSP exception once more (the e2e shim's wallet path keeps
   working regardless).
+
+## 2026-10-22 - /limit order entry UI, root CI for the swapex projects, gitleaks (prompt section 6)
+
+- **Decision:** `/limit` becomes a real screen (owner gate **O3** lifted by the phase
+  prompt). `components/LimitOrderForm.js` + `components/LimitOrdersTable.js` on
+  `pages/limit.js`, gated by `getFeatures().limit` (`deployment + indexer + limitOrders
+  manifest`); ERC-20 tokens only (the contract fills with `transferFrom`, NATIVE is never
+  offered), explicit approve-then-place (exact `amountIn` to the limit contract), EIP-712
+  `SwapexLimitOrders/1` signing through the wallet transport, `POST /orders`, cancel via
+  on-chain `cancel(nonce)` with the tx hash shown. Orders list = `GET /orders` with the
+  indexer's decorated status; honest "indexer not connected" / error / empty states.
+  Unfilled `minAmountOut` comes from `minAmountOutFor` in `lib/limitOrders.js` (the
+  mirror of the contract math), with "Use market" pulling the quoter through `eth_call`.
+- **Decision:** effects never set state synchronously (React 19 lint rule): derived-at-
+  render keys (`poolInfo.key`, `allowanceInfo.key`, tab derived from `account` +
+  selection) plus `Promise.resolve().then(...)` deferral for the load calls - the same
+  pattern `useTokenBalance` already used. The one flaky unit test (nonce uniqueness with
+  `Math.random()`, birthday-collision odds ~50% in a 1e6 space) was made deterministic
+  by sampling the random tail positionally instead of weakening the assertion.
+- **Decision:** CI now covers the active workspace: `.github/workflows/ci.yml` gained
+  `swapex-contracts` (install pinned forge-std + OZ `@v5.2.0` - local lib verified
+  byte-identical to v5.2.0 after CRLF normalization, build/reproducibility diff, sizes
+  gate passes as-is, `forge test`, 5000-run `LimitOrdersTest` fuzz, the Python reference
+  models `reference/check_refmath.py` + `check_pool.py`), `swapex-web` (node 24 = the
+  locally verified version, npm ci, SBOM artifact, lint, vitest, build, prod audit gate),
+  `swapex-indexer` (node 24, npm ci, vitest, `tsc --noEmit`, and `test:integration` which
+  spawns its own anvil), plus workflow-wide `permissions: contents: read` + `concurrency`,
+  with `pull-requests: write` widened only on the gitleaks job. The legacy `web` /
+  `contracts` jobs (root `apps/web` + `contracts/`) are untouched. Still executed on
+  GitHub only after a push - every step's command was verified locally first.
+- **Decision:** `.gitleaks.toml` at the repo root: default rules plus a 6-regex allowlist
+  for the two public Anvil test keys (AGENTS.md rule 1 sanctions them in local scripts)
+  and four public token addresses the entropy rule misread as API keys. gitleaks 8.30.1
+  over all 103 commits: 18 raw findings, all six allowlisted values, 0 findings with
+  `--exit-code=1`. CI runs `gitleaks/gitleaks-action` pinned to v3.0.0's commit SHA
+  (Node 24 runtime; personal account needs no license; `GITLEAKS_CONFIG` set explicitly).
+- **Decision:** the staged `.github` dirs the old STATUS called an owner decision are
+  removed now that the root workflow exists: `.github/worflows/` (9 dead typo-dir
+  example files), `swapex/{Swapex--main,swapex-contracts,swapex-indexer}/.github/`
+  (workflows GitHub never reads; templates already present at root; the two CODEOWNERS
+  were `@YOUR_GITHUB_USER` placeholders on paths that do not exist). Their useful bits
+  (permissions/concurrency, reference-model step, prod audit gate, node 24) were folded
+  into the root workflow; everything deleted stays recoverable from git history.
+- **Verified by running:** web - `npm run lint` 0 errors (17 pre-existing `<img>`
+  warnings), `npm test` 190/190 across 19 files (4 consecutive runs, the fixed nonce test
+  included), plain `npm run build` and the local-env build (13 pages), `npm run e2e` 6/6
+  including `limitOrder.spec.js` (place -> approve -> sign -> POST -> cancel -> decorated
+  `cancelled` row) against the running stack; gitleaks - full-history scan clean with
+  the new config; `forge build --sizes` all contracts in margin (largest SwapexFactory
+  18,374 B); reference models exit 0; `npm audit --omit=dev --audit-level=high` exit 0;
+  workflow YAML parses (6 jobs) with actions/checkout@v4.4.0 + setup-node@v4.4.0 +
+  foundry-toolchain@v1.9.1 + upload-artifact@v4.6.2 + gitleaks-action@v3.0.0 SHAs.
+  Vercel provenance closed: commit status `Vercel: success` on `e7d976e`
+  (dpl_Lh6Y5tsgSFgCMUNigZfGzJ9X2bU7, alias swapex-zeta.vercel.app); the root
+  `vercel-build` script builds `swapex/Swapex--main` and serves it from `.next`, so
+  production runs the migrated app.
+- **Reversal:** move the four jobs back out of the root workflow and the active
+  workspace is invisible to CI again (the exact gap section 6 called out); drop the
+  `.gitleaks.toml` allowlist and CI goes red on the two public Anvil keys that AGENTS.md
+  explicitly permits; delete the deferred-effect pattern and the React 19 lint rule
+  flags the synchronous `setState` through any function the effect calls.

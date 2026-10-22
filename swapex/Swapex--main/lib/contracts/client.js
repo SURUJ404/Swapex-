@@ -8,6 +8,7 @@ import poolAbi from '../abi/SwapexPool.json'
 import quoterAbi from '../abi/SwapexQuoter.json'
 import routerAbi from '../abi/SwapexRouter.json'
 import positionManagerAbi from '../abi/SwapexPositionManager.json'
+import limitOrdersAbi from '../abi/SwapexLimitOrders.json'
 import { ERC20_ABI } from '../../constants'
 
 export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
@@ -20,6 +21,7 @@ const ABIS = {
   quoter: quoterAbi,
   router: routerAbi,
   positionManager: positionManagerAbi,
+  limitOrders: limitOrdersAbi,
   erc20: ERC20_ABI,
 }
 
@@ -29,6 +31,7 @@ const CORE_ADDRESSES = {
   router: 'router',
   quoter: 'quoter',
   positionManager: 'positionManager',
+  limitOrders: 'limitOrders',
 }
 
 /** Drop duplicate fragments. Exported ABIs contain `InvalidPath` twice (once per inheritance

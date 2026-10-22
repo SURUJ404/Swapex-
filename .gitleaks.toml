@@ -1,0 +1,24 @@
+# Gitleaks config for the Swapex repo (used by .github/workflows/ci.yml and
+# locally via: gitleaks git . --config .gitleaks.toml).
+#
+# Start from the default rule set, then allowlist only values that are
+# public knowledge - never a real credential:
+#   - the two well-known Foundry/Anvil dev private keys (account #0 and #1),
+#     allowed in local testnet scripts by AGENTS.md rule 1; they secure
+#     nothing on any real network.
+#   - four public mainnet token contract addresses (checksummed 0x40-hex)
+#     that the generic-api-key entropy rule mistakes for keys.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Public Anvil test keys and public token addresses"
+regexes = [
+  "(?i)ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+  "(?i)59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+  "(?i)c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+  "(?i)89d24a6b4ccb1b6faa2625fe562bdd9a23260359",
+  "(?i)6b175474e89094c44da98b954eedeac495271d0f",
+  "(?i)a0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+]

@@ -8,7 +8,7 @@ import { getTokenMeta } from '../lib/tokenMeta'
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/
 
-export default function TokenSelectModal({ open, onClose, onSelect }) {
+export default function TokenSelectModal({ open, onClose, onSelect, filter }) {
   const { clients } = useWeb3()
   const publicClient = clients?.public
   const [search, setSearch] = useState('')
@@ -16,7 +16,7 @@ export default function TokenSelectModal({ open, onClose, onSelect }) {
   const [importError, setImportError] = useState(null)
 
   const query = search.trim()
-  const results = searchTokens(query)
+  const results = searchTokens(query).filter(filter || (() => true))
   const isAddress = ADDRESS.test(query)
   const known = isAddress ? findToken(query) : null
   const canImport = isAddress && !known
